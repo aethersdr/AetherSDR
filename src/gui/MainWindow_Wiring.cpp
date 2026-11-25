@@ -17,6 +17,7 @@
 #include "core/DbmRangePlausibility.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "core/backends/SquelchLevelScale.h"
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -32,6 +33,7 @@
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
+#include "PanCloseCenterLock.h"
 #include "PanRecenterPolicy.h"
 #include "PanViewLockPolicy.h"
 #include "ViewLockSettings.h"
@@ -68,6 +70,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "models/MicrohamTrioRadioLink.h"
 #include "core/SpeConnection.h"
 #include "core/SpeLegacyProtocol.h"
 #include "core/SpeProtocol.h"
@@ -91,7 +94,7 @@
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
-#include "models/ProfileLoadCommand.h"
+#include "models/ProfileLoadPolicy.h"
 #include "models/RadioModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "models/SliceModel.h"
@@ -119,16 +122,23 @@ namespace AetherSDR {
 void MainWindow::wireStatusBarMessages()
 {
     auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    connect(this, &MainWindow::agentActivityChanged,
+            messageOverlay, &StatusBarMessageOverlay::setAgentActivity);
     ThemeManager::instance().applyStyleSheet(
         messageOverlay,
         QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
-                       " background: {{color.background.1}}; font-size: 12px;"
+                       " qproperty-activityDotColor: {{color.canon.cyan}}; background: {{color.background.1}}; font-size: 12px;"
                        " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
                 statusBar()->showMessage(
                     tr("ATU Tune Failed - %1").arg(detail), 5000);
             });
+    // The transmit time-out's warning (RFC #7021): the model raises the
+    // panadapter notice; this is its short audible cue on this computer.
+    connect(&m_radioModel, &RadioModel::txTimeoutWarning, this, [](int) {
+        QApplication::beep();
+    });
 }
 
 
@@ -661,6 +671,27 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
 
     m_centerLockSliceByPan.remove(panId);
     syncCenterLockUi(panId);
+}
+
+bool MainWindow::closePanForgettingCenterLock(const QString& panId)
+{
+    const QString id = panId;   // the caller's string can die with the pan's widget
+    const SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(id) : nullptr;
+    const PanCloseCenterLock::Slot slot{centerLockRadioKey(), sw ? sw->panIndex() : -1,
+                                        m_centerLockSessionOnlyPans.contains(id)};
+    bool savedChanged = false;
+    const bool accepted = PanCloseCenterLock::closeThenForget(
+        slot, m_centerLockSliceLetterByRadioPanIndex,
+        [this, &id] { return m_radioModel.removePanadapter(id); },
+        [this, &id] {
+            m_centerLockRebind.cancel(id);
+            clearCenterLockForPan(id);
+        },
+        savedChanged);
+    if (savedChanged) {
+        saveCenterLockSettings();
+    }
+    return accepted;
 }
 
 void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
@@ -2028,13 +2059,18 @@ void MainWindow::refreshTunerPortFrequency()
         }
         kpaSource = QStringLiteral("%1 · %2 MHz").arg(kpaTx->letter()).arg(mhz, 0, 'f', 6);
     }
+    const bool transmitting = m_radioModel.transmitModel().isTransmitting();
+    std::optional<int> kpa1500Khz;
     if (kpaTx) {
         const double mhz = kpaTx->frequency()
             + ((kpaTx->mode() == "FM" || kpaTx->mode() == "NFM") ? kpaTx->txOffsetFreq() : 0.0)
             + (kpaTx->xitOn() ? kpaTx->xitFreq() / 1.0e6 : 0.0);
         m_kat500Model.setEffectiveTxFrequencyHz(qRound64(mhz * 1.0e6));
+        kpa1500Khz = static_cast<int>(qRound64(mhz * 1.0e3));
     }
-    const bool transmitting = m_radioModel.transmitModel().isTransmitting();
+    // The KPA1500 follows whichever slice holds the TX flag (split, XIT and
+    // FM offset included); band changes are held while transmitting.
+    m_kpa1500Conn.setTxFrequency(kpa1500Khz, transmitting, m_radioModel.isRadioTransmitting());
     m_kpa500Conn.setTxContext(kpaBand, kpaSource, transmitting);
     if (m_appletPanel && m_appletPanel->kpa500Applet()) {
         m_appletPanel->kpa500Applet()->setRadioTransmitting(transmitting);
@@ -3508,6 +3544,64 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
     });
 }
 
+void MainWindow::reloadLinkPanDisplayRates()
+{
+    m_linkPanDisplayRates =
+        ClientDisplaySettings::linkPanDisplayRates(m_radioModel.settingsScope());
+    if (!m_panStack) {
+        return;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        auto* sw = applet ? applet->spectrumWidget() : nullptr;
+        if (sw && sw->overlayMenu()) {
+            sw->overlayMenu()->syncLinkPanDisplayRates(m_linkPanDisplayRates);
+        }
+    }
+}
+
+// The operator's toggle. Saved per radio and shown in every pan's panel; it
+// sends nothing to the radio and changes no rate.
+void MainWindow::setLinkPanDisplayRates(bool on)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    const bool saved = ClientDisplaySettings::saveLinkPanDisplayRates(scope, on);
+    // Turning the link on when the store refuses it (a corrupt or newer
+    // document, or a failed write): show and use what the store holds, so the
+    // toggle cannot read on for a session and then silently revert at the next
+    // connection. Turning it off always holds for the session, so the operator
+    // can always unlink.
+    if (on && !saved && scope.hasRadioIdentity()) {
+        reloadLinkPanDisplayRates();
+        return;
+    }
+    m_linkPanDisplayRates = on;
+    if (!m_panStack) {
+        return;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        auto* sw = applet ? applet->spectrumWidget() : nullptr;
+        if (sw && sw->overlayMenu()) {
+            sw->overlayMenu()->syncLinkPanDisplayRates(on);
+        }
+    }
+}
+
+// The pans an operator's FFT FPS or waterfall-rate move applies to: the source
+// alone, or with the link on, every open pan with the source first.
+QList<PanadapterApplet*> MainWindow::displayRateTargets(PanadapterApplet* source) const
+{
+    QList<PanadapterApplet*> targets{source};
+    if (!m_linkPanDisplayRates || !m_panStack) {
+        return targets;
+    }
+    for (auto* applet : m_panStack->allApplets()) {
+        if (applet && applet != source) {
+            targets.append(applet);
+        }
+    }
+    return targets;
+}
+
 // May the client store and restore FFT FPS for this radio? Only where the
 // engine paces the frames and the backend declares the client the owner
 // (RadioCapabilities::clientPersistsPanFrameRate). Read by the save and by the
@@ -3528,6 +3622,21 @@ void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
         ClientDisplaySettings::pendingWriteKey(scope, panIndex, "fftFps"),
         [scope, panIndex, fps] {
             ClientDisplaySettings::saveFftFps(scope, panIndex, true, fps);
+        });
+}
+
+// Per-pan spot marker visibility. Always client-owned — no backend ever
+// publishes or controls this preference (#5711).
+void MainWindow::scheduleClientSpotMarkersOnPanSave(int panIndex, bool on)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "spotMarkers"),
+        [scope, panIndex, on] {
+            ClientDisplaySettings::saveSpotMarkersOnPan(scope, panIndex, on);
         });
 }
 
@@ -3707,6 +3816,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         m_radioModel.requestPanAverage(panId, sw->fftAverage());
         m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
     }
+
+    // Per-pan spot marker visibility. Outside the shapesDisplayRatesLocally()
+    // block — this preference is backend-agnostic and should restore on any
+    // radio, not only those that shape display rates. value_or(true) makes the
+    // restore total: a pan with no stored row (new install, reclaimed slot)
+    // gets the default "on" rather than inheriting a previous radio's "off".
+    // loadSpotMarkersOnPan() seeds the member directly without emitting
+    // spotMarkersOnPanChanged, so no redundant write is scheduled. (#5711)
+    sw->loadSpotMarkersOnPan(
+        ClientDisplaySettings::spotMarkersOnPan(
+            m_radioModel.settingsScope(), sw->panIndex()).value_or(true));
 
     // Reclaimed pans already hold their latest status and do not necessarily
     // emit a new report after reconnect. Seed the view immediately.
@@ -4583,14 +4703,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
-        clearCenterLockForPan(panId, true);
-        // Closing a pan drops its lock intent too, or the next pan that reuses
-        // this index would start locked.
-        setViewLockForPan(panId, false, /*persist=*/true);
-        // Single source of truth for teardown: removePanadapter sends the
-        // FlexLib-correct "display pan remove" + "display panafall remove"
-        // pair, so a panafall-created pan also frees its waterfall. (#3843)
-        m_radioModel.removePanadapter(panId);
+        // removePanadapter sends "display pan remove" + "display panafall
+        // remove", so a panafall-created pan also frees its waterfall (#3843).
+        closePanForgettingCenterLock(panId);
     });
 
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────
@@ -5094,19 +5209,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
-            this, [this, applet, sw](int v) {
-        sw->setFftFps(v);  // always update restore target for when throttle lifts
-        // The operator's value, saved before the throttle test: the adaptive
-        // cap is transient and must not decide what is remembered.
-        scheduleClientFftFpsSave(sw->panIndex(), v);
-        if (m_adaptiveThrottleActive)
-            return;
-        // Through the model, not a raw sendCommand: on a backend that streams
-        // raw spectra this is the engine's own shaping target, and the Flex wire
-        // text it used to send reached nothing there — the slider moved the
-        // widget's render cap while frames kept arriving at the IQ sample rate.
-        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
+            this, [this, applet](int v) {
+        // This pan, or every open pan while the link is on (#6799). The other
+        // pans' sliders update with their signals blocked, so each operator
+        // move is one request per pan and never fans out again.
+        for (auto* target : displayRateTargets(applet)) {
+            auto* tsw = target->spectrumWidget();
+            if (!tsw) {
+                continue;
+            }
+            tsw->setFftFps(v);  // always update restore target for when throttle lifts
+            // The operator's value, saved before the throttle test: the adaptive
+            // cap is transient and must not decide what is remembered.
+            scheduleClientFftFpsSave(tsw->panIndex(), v);
+            if (m_adaptiveThrottleActive) {
+                continue;
+            }
+            // Through the model, not a raw sendCommand: on a backend that streams
+            // raw spectra this is the engine's own shaping target, and the Flex wire
+            // text it used to send reached nothing there — the slider moved the
+            // widget's render cap while frames kept arriving at the IQ sample rate.
+            m_radioModel.requestPanDisplayRates(target->panId(), v, /*wfMs=*/0);
+        }
     });
+    connect(menu, &SpectrumOverlayMenu::linkPanDisplayRatesChanged,
+            this, &MainWindow::setLinkPanDisplayRates, Qt::UniqueConnection);
+    menu->syncLinkPanDisplayRates(m_linkPanDisplayRates);
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
         sw->setFftWeightedAvg(on);
@@ -5206,11 +5334,26 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             }
             return;
         }
-        sw->setWfLineDuration(clampedRate);
-        scheduleClientWaterfallRateSave(sw->panIndex(), clampedRate);
-        // Same reason as the FPS slider above: on a raw-spectrum backend this is
-        // the engine's waterfall shaping target, not a radio setting.
-        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
+        // This pan, or every open pan while the link is on (#6799); the slider
+        // and the time-scale drag are both the operator's move. A pan showing a
+        // Kiwi waterfall is skipped: its rate drives the Kiwi profile, not the
+        // radio.
+        for (auto* target : displayRateTargets(applet)) {
+            auto* tsw = target->spectrumWidget();
+            if (!tsw || (target != applet && kiwiSdrPanDisplaysKiwi(target->panId()))) {
+                continue;
+            }
+            tsw->setWfLineDuration(clampedRate);
+            scheduleClientWaterfallRateSave(tsw->panIndex(), clampedRate);
+            // While the adaptive throttle caps the pans, the widget value is the
+            // restore target and the cap stays on the wire, as for FFT FPS.
+            if (m_adaptiveThrottleActive) {
+                continue;
+            }
+            // Same reason as the FPS slider above: on a raw-spectrum backend this
+            // is the engine's waterfall shaping target, not a radio setting.
+            m_radioModel.requestPanDisplayRates(target->panId(), /*fps=*/0, clampedRate);
+        }
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);
@@ -5586,6 +5729,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         QMetaObject::invokeMethod(m_wsjtxClient, [=, this] {
             m_wsjtxClient->startListening(addr, port);
         });
+    });
+
+    // ── Per-pan spot marker visibility persistence (#5711) ───────────────────
+    connect(sw, &SpectrumWidget::spotMarkersOnPanChanged,
+            this, [this, sw](bool on) {
+        scheduleClientSpotMarkersOnPanSave(sw->panIndex(), on);
     });
 
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
@@ -6116,8 +6265,11 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     // Prefer the visible spectrum state when available so reveal/follow stays
     // aligned with recent manual pan/zoom gestures even if the model echo lags.
+    // Its target, not the mid-glide center: fast wheel steps land inside the
+    // follow animation, and each must move the pan by whole steps from where
+    // the last one was headed (#7529).
     auto* sw = spectrumForSlice(slice);
-    result.oldCenterMhz = sw ? sw->centerMhz() : pan->centerMhz();
+    result.oldCenterMhz = sw ? sw->panCenterTargetMhz() : pan->centerMhz();
     result.newCenterMhz = result.oldCenterMhz;
     result.bandwidthMhz = sw ? sw->bandwidthMhz() : pan->bandwidthMhz();
 
@@ -6945,6 +7097,7 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_rfkitConn.setAutoReconnect(ar);
+        m_trioModel.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
@@ -7653,7 +7806,7 @@ void MainWindow::wireMeters()
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
     }
 
-    // ── Elecraft KPA1500 — direct TCP, no FlexRadio relay (#4097) ────────
+    // ── Elecraft KPA1500 — direct TCP or UDP, no FlexRadio relay (#4097) ─
     // See docs/architecture/kpa1500-amplifier-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
     // wiring first, the auto-connect trigger LAST, so nothing misses the
@@ -7671,7 +7824,19 @@ void MainWindow::wireMeters()
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
         m_appletPanel->kpa1500Applet()->setConnected(false);
-        m_appletPanel->setKpa1500Visible(false);
+        // A confirmed-asleep amp keeps its applet so POWER can wake it.
+        if (!m_kpa1500Conn.isAsleepOffline()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::asleepOfflineChanged, this, [this](bool asleep) {
+        m_appletPanel->kpa1500Applet()->setAsleepOffline(
+            asleep, m_kpa1500Conn.canWakeFromSleep(), m_kpa1500Conn.sleepNetWake());
+        if (asleep) {
+            m_appletPanel->setKpa1500Visible(true);
+        } else if (!m_kpa1500Conn.isConnected()) {
+            m_appletPanel->setKpa1500Visible(false);
+        }
     });
     connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
             [this](const AetherSDR::Kpa1500::Status& status) {
@@ -7701,6 +7866,35 @@ void MainWindow::wireMeters()
     connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::faultClearRequested, this, [this]() {
         m_kpa1500Conn.clearFault();
     });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::fanMinimumRequested, this,
+            [this](int level) {
+        m_kpa1500Conn.setFanMinimum(level);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::powerRequested, this,
+            [this](bool on) {
+        m_kpa1500Conn.setPower(on);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::followTxToggled, this,
+            [this](bool on) {
+        m_kpa1500Conn.setFollowTx(on);
+        refreshTunerPortFrequency();
+    });
+    m_kpa1500Conn.setFollowTx(m_appletPanel->kpa1500Applet()->followTx());
+    connect(&m_kpa1500Conn, &Kpa1500Connection::controlUnconfirmed, this,
+            [this](const QString& control) {
+        m_appletPanel->kpa1500Applet()->showControlUnconfirmed(control);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::controlRefused, this,
+            [this](const QString& message) {
+        m_appletPanel->kpa1500Applet()->showControlNotice(message);
+    });
+    // The MAC Wake-on-LAN needs, kept with the device's peripheral record so
+    // POWER can wake an amp that was already asleep when this run started.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::macAddressReported, this, [](const QString& mac) {
+        if (PeripheralSettings::deviceString("Kpa1500", "MacAddress") != mac) {
+            PeripheralSettings::setDeviceString("Kpa1500", "MacAddress", mac);
+        }
+    });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning
     // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
@@ -7709,8 +7903,12 @@ void MainWindow::wireMeters()
         const QString ip = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
         const int port = PeripheralSettings::deviceInt(
             "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
-        if (!ip.isEmpty())
+        m_kpa1500Conn.setTransport(AetherSDR::Kpa1500::transportFromSettingValue(
+            PeripheralSettings::deviceString("Kpa1500", "Transport")));
+        m_kpa1500Conn.setWakeMacAddress(PeripheralSettings::deviceString("Kpa1500", "MacAddress"));
+        if (!ip.isEmpty()) {
             m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
+        }
     }
 
     // ── RF-KIT amplifier — REST/JSON over HTTP, no FlexRadio relay ────────
@@ -7757,6 +7955,20 @@ void MainWindow::wireMeters()
         if (!ip.isEmpty())
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
+
+    // ── microHAM Trio antenna switch ──────────────────────────────────────
+    // The Peripherals page shows its state and labels; the link below sends
+    // the antenna picks made in RX ANT / TX ANT to it. Its session is taken at
+    // startup only with "Connect automatically" on, like the KPA500/KAT500 rows.
+    m_trioModel.loadSettings(PeripheralSettings::autoConnect(
+        QLatin1String(MicrohamTrioSettings::kPeripheralId)));
+    // The Trio is told which radio is connected (the Peripherals page reads and
+    // stores that radio's port on it), and its antenna ports are offered in
+    // the RX ANT / TX ANT menus beside the radio's own.
+    m_trioLink = new MicrohamTrioRadioLink(&m_radioModel, &m_trioModel, this);
+    connect(&m_trioModel, &MicrohamTrioModel::notice, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
@@ -7980,6 +8192,8 @@ void MainWindow::wireMeters()
     connect(&m_kpa500Conn, &Kpa500Connection::telemetryReceived, kpa, &Kpa500Applet::recordTelemetry);
     connect(&m_kpa500Conn, &Kpa500Connection::bandTrackingChanged, kpa, &Kpa500Applet::setBandTrackingText);
     connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
+            this, [this](bool) { refreshTunerPortFrequency(); });
+    connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });

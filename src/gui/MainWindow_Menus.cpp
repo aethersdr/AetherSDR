@@ -26,7 +26,6 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
-#include "ClientChainApplet.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -35,6 +34,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "RadioHealthDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
@@ -648,6 +648,9 @@ void MainWindow::buildMenuBar()
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
         syncOperatingShortcutsEnabled();
+        if (m_shortcutTooltips) {
+            m_shortcutTooltips->setShortcutsEnabled(on);
+        }
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
@@ -1016,14 +1019,6 @@ void MainWindow::buildMenuBar()
         showOrRaiseCanon(m_settingsBrowserDialog,
                          [this] { return new SettingsBrowserDialog(this); });
     });
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        // Single-click re-enable of NR2 from LastClientNr also runs
-        // through enableNr2WithWisdom (#2275 — direct enable can crash).
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
-                this, &MainWindow::enableNr2WithWisdom);
-    }
-
     settingsMenu->addSeparator();
 
     // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
@@ -1579,12 +1574,6 @@ void MainWindow::buildMenuBar()
     connect(dspAction, &QAction::triggered, this, [this] {
         ensureAetherRxDialog();
     });
-    // RX chain DSP tile double-click opens it too — same entry point.
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxDspEditRequested,
-                this, [dspAction]() { dspAction->trigger(); });
-    }
 
     // The three checkable panel toggles re-read their own state after the
     // handler runs: triggered() fires *after* Qt has flipped the check mark, and
@@ -2022,26 +2011,40 @@ void MainWindow::buildMenuBar()
 
         // Rich-text link colours are baked into the HTML, so the footer is
         // rewritten when the theme changes while the window is open.
-        auto* footer = new QLabel;
+        auto* footer = new QLabel(dlg->bodyWidget());
         auto setFooterText = [footer] {
             auto& tm = AetherSDR::ThemeManager::instance();
             footer->setText(QStringLiteral(
                 "<div style='text-align:center;'>"
                 "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
-                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
-                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1;'>"
                 "github.com/aethersdr/AetherSDR</a></p>"
                 "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
                 "D-STAR is a registered trademark of Icom Inc.<br>"
-                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
-                "HF propagation forecasts provided by "
-                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.</p>"
+                "<p style='margin:6px 0;'><a href='https://www.hamqsl.com/solar.html' "
+                "style='color:%1;'>HamQSL/N0NBH</a> supplies HF/VHF band conditions.<br>"
+                "<a href='https://www.swpc.noaa.gov/' style='color:%1;'>NOAA SWPC</a> supplies K/A/SFI, "
+                "forecasts, solar indices and GOES X-ray data.<br>"
+                "Solar images from <a href='https://sdo.gsfc.nasa.gov/' style='color:%1;'>NASA&nbsp;SDO</a> "
+                "and lunar data from <a href='https://svs.gsfc.nasa.gov/gallery/moonphase/' "
+                "style='color:%1;'>NASA&nbsp;SVS</a>.</p>"
+                "<p style='margin:0;'>AetherMap city lights: 2016 composite from "
+                "<a href='https://science.nasa.gov/earth/earth-observatory/earth-at-night/maps/' "
+                "style='color:%1;'>NASA/GSFC</a>.<br>"
+                "US backup radar and station locations from "
+                "<a href='https://radar.weather.gov/' style='color:%1;'>NOAA/NWS</a>.<br>"
+                "See Sources &amp; licenses in AetherMap for more credits.</p>"
                 "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
         };
         setFooterText();
         connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
         footer->setAlignment(Qt::AlignCenter);
         footer->setOpenExternalLinks(true);
+        // Tab reaches the links and Enter opens one; mouse access is unchanged.
+        footer->setTextInteractionFlags(Qt::LinksAccessibleByMouse
+                                        | Qt::LinksAccessibleByKeyboard);
         footer->setWordWrap(true);
         tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
         // A wrapped rich-text label under-reports its height in a fixed-width

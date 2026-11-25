@@ -6,6 +6,7 @@
 #include <QTimer>
 
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/SquelchGate.h"
 #include "core/RadioSettingsScope.h"
 #include <optional>
 
@@ -80,6 +81,10 @@ public:
     QString autoSqlUnavailableReason() const;
     // The SQL button's accessible description; VfoWidget's mirror reads it too.
     QString sqlButtonAccessibleDescription() const;
+    // The gate state the SQL slider shows: the slice's reported gate in a mode
+    // the radio reports it in (RadioCapabilities::squelchGateModes) with SQL
+    // not Off; Unavailable otherwise, and the slider then shows no gate.
+    SquelchGateState shownSquelchGate() const;
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
     void cycleStepDown();
@@ -241,6 +246,8 @@ private:
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
     // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
     std::optional<SquelchLevelScale> m_exclusiveSquelch;
+    QStringList m_squelchGateModes;
+    QString m_paintedSquelchGateLine;
     QPushButton* m_filterUnavailable{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
@@ -361,6 +368,9 @@ private:
     AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
     QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
+    // Paints shownSquelchGate() on the slider: fill colour, and a line added
+    // to its tooltip and accessible description.
+    void applySqlGateVisuals();
     void applySqlButtonDescription();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

@@ -534,7 +534,7 @@ QString SmartCatProtocol::cmdFR(const QString& arg)
 
 // ── TX / ZZTX — PTT on ───────────────────────────────────────────────────────
 // P1: 0 = PTT off (alias for RX;), 1/2 = PTT on selecting mic source.
-// Use PttSource::Dax to match rigctld: CAT callers must bypass local voice-mode
+// PttSource::Cat, as rigctld uses: CAT callers bypass local voice-mode
 // interlocks so the radio itself is authoritative.
 
 QString SmartCatProtocol::cmdTX(const QString& arg)
@@ -543,7 +543,7 @@ QString SmartCatProtocol::cmdTX(const QString& arg)
     if (!m_pttRequest.valid()) {
         m_pttRequest = m_txProducer.request();
     }
-    (void)m_model->setProducerTransmit(m_pttRequest, true, TransmitModel::PttSource::Dax);
+    (void)m_model->setProducerTransmit(m_pttRequest, true, TransmitModel::PttSource::Cat);
     return {};
 }
 
@@ -553,7 +553,8 @@ QString SmartCatProtocol::cmdRX()
 {
     const TxCoordinator::Request request = m_pttRequest;
     m_pttRequest = {};
-    (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+    m_model->noteTxInputReleased(m_txProducer.request());
+    (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Cat);
     return {};
 }
 
@@ -567,7 +568,7 @@ void SmartCatProtocol::releasePtt()
     const TxCoordinator::Request request = m_pttRequest;
     m_pttRequest = {};
     if (m_model) {
-        (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+        (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Cat);
         m_model->abortProducerCwx(m_cwxRequest);
     }
     m_cwxRequest = {};

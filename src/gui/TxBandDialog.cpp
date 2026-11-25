@@ -5,6 +5,7 @@
 #include "FramelessResizer.h"
 
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -290,6 +291,8 @@ void TxBandDialog::buildTable()
 
         auto* rfEdit = new QLineEdit(QString::number(b.rfPower));
         rfEdit->setAccessibleName(tr("RF power percent, band %1").arg(b.bandName));
+        // The radio loads a band's RF power on QSY into that band: drive (#5851).
+        markTxSetpoint(rfEdit);
         rfEdit->setFixedWidth(50);
         rfEdit->setAlignment(Qt::AlignCenter);
         int bandId = id;
@@ -311,6 +314,7 @@ void TxBandDialog::buildTable()
 
         auto* tuneEdit = new QLineEdit(QString::number(b.tunePower));
         tuneEdit->setAccessibleName(tr("Tune power percent, band %1").arg(b.bandName));
+        markTxSetpoint(tuneEdit);
         tuneEdit->setFixedWidth(50);
         tuneEdit->setAlignment(Qt::AlignCenter);
         connect(tuneEdit, &QLineEdit::editingFinished, this, [this, tuneEdit, bandId, session] {

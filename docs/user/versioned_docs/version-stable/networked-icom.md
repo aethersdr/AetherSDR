@@ -145,6 +145,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-9700
 
+- The **Mode** selector offers **USB**, **LSB**, **CW**, **CWL** (reverse CW), **AM**, **FM**, **DFM**, **DIGU** and **DIGL** for the radio.
 - Three bands with their own power ceilings (100 / 75 / 10 W).
 - CTCSS (TX and RX), DTCS, dial-lock sync, supply voltage, PA drain current, continuous compression and LAN MOD level. The **COMP** slider runs 0–100, with a numeric readout.
 - If CI-V stalls, AetherSDR tries a bounded automatic recovery before a full reconnect.

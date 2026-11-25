@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 #include "FlexSliceStatusTestSupport.h"
 #include "FlexRadioStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
@@ -35,6 +36,7 @@
 #include "core/TciAudioHeader.h"
 #include "core/TciClient.h"
 #include "core/TciIoWorker.h"
+#include "core/TciKeepAlive.h"
 #include "core/TciProtocol.h"
 #endif
 
@@ -42,6 +44,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QTimer>
 #include <QThread>
@@ -111,12 +114,13 @@ public:
     }
     static void bindAudioEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setAudioCommandSink(radio.audioCommandSink());
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static std::function<void(int, const QString&)> takeDaxCreateReply(RadioModel& radio)
     {
-        if (radio.m_pendingCallbacks.isEmpty()) { return {}; }
-        return radio.m_pendingCallbacks.take(radio.m_pendingCallbacks.cbegin().key());
+        QCoreApplication::sendPostedEvents(radio.m_connection, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(&FlexCommandTestAccess::session(radio), QEvent::MetaCall);
+        return FlexCommandTestAccess::takeFirstReply(radio);
     }
     static bool tciPromotion(TciServer& server, int sliceId)
     {
@@ -186,6 +190,12 @@ public:
             server.m_io->dispatchText(socket.id());
         }
     }
+    // The I/O worker captures the next text's request but holds it from the
+    // model, as a busy event loop would.
+    static void holdNativeTciText(TciServer& server, TciClient& socket)
+    {
+        server.m_io->m_clients[socket.id()].textInFlight = true;
+    }
     static TxCoordinator::Request tciClientRequest(TciServer& server, TciClient& socket)
     { return server.clientStateFor(&socket)->pttRequest; }
     static TxCoordinator::Context tciMedia(const TciServer& server) { return server.m_tciTxContext; }
@@ -235,6 +245,22 @@ public:
     }
     // Incremented only for a frame that passed the ownership + header gates.
     static qint64 tciAudioBlocks(const TciServer& server) { return server.m_io->m_txAudioBlocks; }
+    // Keepalive seams: an injected clock and a transport that never reports
+    // the abort back, as a dead peer's socket may not.
+    static void injectTciKeepAlive(TciServer& server, TciClient& socket, const qint64* now,
+                                   int* pings, int* aborts)
+    {
+        TciIoWorker& io = *server.m_io;
+        io.m_keepAliveNow = [now] { return *now; };
+        io.m_keepAlivePing = [pings](quint64) { ++*pings; };
+        io.m_keepAliveAbort = [aborts](quint64) { ++*aborts; };
+        io.m_clients[socket.id()].keepAlive = TciKeepAlive(*now);
+    }
+    static void tciKeepAliveTick(TciServer& server) { server.m_io->checkKeepAlive(); }
+    static void wireTciDisconnect(TciServer& server, TciClient& socket)
+    {
+        QObject::connect(&socket, &TciClient::disconnected, &server, &TciServer::onClientDisconnected);
+    }
 #endif
     static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
     {
@@ -242,8 +268,26 @@ public:
     }
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
-    static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
+    static qsizetype pendingReplies(const RadioModel& radio) { return FlexCommandTestAccess::pending(const_cast<RadioModel&>(radio)); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    // Host transmit time-out (RFC #7021): injected clock, hand-emitted keyed edge.
+    static void txTimeoutClock(RadioModel& radio, qint64* now)
+    { radio.m_txTimeout.setClock([now] { return *now; }); }
+    static void radioKeyedEdge(RadioModel& radio, bool on)
+    {
+        radio.m_radioTransmitting = on;
+        emit radio.radioTransmittingChanged(on);
+    }
+    static void txTimeoutTick(RadioModel& radio) { radio.onTxTimeoutTick(); }
+#ifdef HAVE_WEBSOCKETS
+    // What abortTciPtt()'s 1250 ms fail-closed barrier does when it ends with
+    // the radio idle: lift it and drain the deferred PTT input.
+    static void endTciUnkeyBarrier(TciServer& server)
+    {
+        server.m_tciPttCancelPending = false;
+        server.drainDeferredRoutingAndPtt();
+    }
+#endif
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
         radio.acknowledgeIndependentTxStop(evidence);
@@ -263,39 +307,31 @@ public:
     }
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setTxCommandSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-            return radio.sendTxKeyingCommand(command, fence);
-        });
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static void bindCwxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setCwxConfigurationSink([&radio](const QString& wire, const RadioControlFence& current) {
-            return radio.sendCwxConfigurationCommand(wire, current);
-        });
-        encoder.setCwxCommandSink([&radio](const QString& wire, const TxCoordinator::Command& command,
-                                          const RadioControlFence& current, FlexBackend::CommandReply reply) {
-            return radio.sendTxTcpCommand(wire, command.operation, command.keying,
-                [completion = command.completion] { completion.finish(); }, std::move(reply), current);
-        });
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands);
-    static void teardownWithPendingReply(RadioModel& radio, RadioModel::ResponseCallback callback)
+    static void teardownWithPendingReply(RadioModel& radio, FlexCommandTestAccess::Reply callback)
     {
-        radio.m_pendingCallbacks.insert(1234, std::move(callback));
+        FlexCommandTestAccess::insertReply(FlexCommandTestAccess::session(radio), 1234, std::move(callback));
         radio.teardownBackend();
     }
     static void insertPendingReply(RadioModel& radio, quint32 sequence,
-                                   RadioModel::ResponseCallback callback)
+                                   FlexCommandTestAccess::Reply callback)
     {
-        radio.m_pendingCallbacks.insert(sequence, std::move(callback));
+        FlexCommandTestAccess::insertReply(FlexCommandTestAccess::session(radio), sequence, std::move(callback));
     }
     static qsizetype pendingReplyCount(const RadioModel& radio)
     {
-        return radio.m_pendingCallbacks.size();
+        return FlexCommandTestAccess::pending(const_cast<RadioModel&>(radio));
     }
     static void disconnect(RadioModel& radio)
     {
         radio.onDisconnected();
+        FlexCommandTestAccess::session(radio).retire(QStringLiteral("Disconnected."));
     }
     static RadioConnection* connection(RadioModel& radio)
     {
@@ -303,15 +339,21 @@ public:
     }
     static quint32 firstPendingReplySequence(const RadioModel& radio)
     {
-        return radio.m_pendingCallbacks.isEmpty() ? 0 : radio.m_pendingCallbacks.cbegin().key();
+        return FlexCommandTestAccess::firstSequence(const_cast<RadioModel&>(radio));
     }
     static void primeInertSession(RadioModel& radio)
     {
+        QMetaObject::invokeMethod(radio.m_connection, [connection = radio.m_connection] {
+            if (!connection->m_commandSinkForTest) {
+                connection->m_commandSinkForTest = [](quint32, const QString&) {};
+            }
+        }, Qt::BlockingQueuedConnection);
         radio.m_connection->m_state.store(ConnectionState::Connected);
         radio.m_txSessionClosing = false;
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+        FlexCommandTestAccess::session(radio);
     }
     static void beginMultiFlexProbe(RadioModel& radio)
     {
@@ -350,6 +392,7 @@ public:
         radio.m_connection->m_commandSinkForTest =
             [&commands](quint32, const QString& c) { commands << c; };
         radio.m_connection->m_state.store(ConnectionState::Connected);
+        FlexCommandTestAccess::session(radio);
         radio.m_connection->m_handle.store(0x71);
         AudioStreamDelta audio;
         audio.streamId = 0x12345678;
@@ -517,13 +560,14 @@ public:
 namespace AetherSDR {
 void TxOperationIntegrationTestAccess::injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
 {
+    connection.m_state.store(ConnectionState::Connected);
     connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
     radio.m_family = QStringLiteral("flex");
     radio.m_connection = &connection;
     auto* backend = static_cast<RecordingBackend*>(radio.m_backend.get());
     if (!backend->cwControls) { backend->cwControls = std::make_unique<FlexCwControls>(nullptr); }
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        return radio.sendTxKeyingCommand(command, fence);
+        return FlexCommandTestAccess::tx(radio, command, fence);
     });
 }
 void TxOperationIntegrationTestAccess::captureCwLifecycle(RadioModel& radio, QStringList& commands)
@@ -559,7 +603,7 @@ void TxOperationIntegrationTestAccess::injectNetCwTransport(RadioModel& radio, P
     backend->cwControls->m_stream = &stream;
     backend->cwControls->m_streamId = 0x12345678;
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        return radio.sendTxKeyingCommand(command, fence);
+        return FlexCommandTestAccess::tx(radio, command, fence);
     });
 }
 } // namespace AetherSDR
@@ -777,7 +821,7 @@ void flexSharedProtocolEligibility()
 {
     FlexBackend backend;
     quint32 sequence = 100;
-    backend.setIndependentTxSequenceProvider([&sequence] { return ++sequence; });
+    backend.setIndependentTxSequenceProviderForTest([&sequence] { return ++sequence; });
     for (QStringView model : {u"FLEX-6300", u"FLEX-6400", u"FLEX-6400M", u"FLEX-6500",
              u"FLEX-6600", u"FLEX-6600M", u"FLEX-6700", u"FLEX-8400", u"FLEX-8400M",
              u"FLEX-8600", u"FLEX-8600M"}) {
@@ -793,7 +837,7 @@ void flexSharedProtocolEligibility()
     TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("2.0.0.0"));
     check(backend.independentTxControl().activities == 0, "unknown TCP API has no independent backend TX activity");
     TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("1.4.0.0"));
-    backend.setIndependentTxSequenceProvider({});
+    backend.setIndependentTxSequenceProviderForTest({});
     check(backend.independentTxControl().activities == 0, "shared command sequence provider is still required");
 }
 
@@ -1262,13 +1306,13 @@ void flexEncoding()
     TxTestAuthority authority;
     QStringList commands;
     FlexBackend backend;
-    backend.setCommandSink([&](const QString& command) { commands << command; });
+    backend.setCommandSinkForTest([&](const QString& command) { commands << command; });
     backend.setKeying(true, authority.operation);
     backend.setTune(true, 10, authority.operation);
     backend.setAtu(true, authority.operation);
     check(commands.isEmpty(), "primary Flex keying never falls back to an unfenced generic sink");
     std::vector<bool> keying;
-    backend.setTxCommandSink([&](const QString& command, const TxCoordinator::Command& fence) {
+    backend.setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command& fence) {
         commands << command;
         keying.push_back(fence.keying);
         return true;
@@ -1491,7 +1535,7 @@ void pendingCallbackDisconnectExpiry()
         const bool invoked = QMetaObject::invokeMethod(
             connection, "commandResponse", Qt::BlockingQueuedConnection,
             Q_ARG(quint32, sequence), Q_ARG(int, code), Q_ARG(QString, body));
-        QCoreApplication::sendPostedEvents(&radio, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(&FlexCommandTestAccess::session(radio), QEvent::MetaCall);
         return invoked;
     };
 
@@ -2926,6 +2970,263 @@ void testInjectionReopensAdmission()
               "rebuildBackendForTest reopens admission like setBackendForTest");
     }
 }
+// RFC #7021 latch through the real producers (d274): a client that keeps
+// asking to transmit after the time-out is refused every time, and only its
+// own off followed by a new on keys again. The refused key's teardown, on
+// whichever route the producer uses, is never a release.
+void txTimeoutLatchThroughProducers()
+{
+    const auto drain = [] {
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    const auto expire = [&drain](Fixture& f, qint64& now) {
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, true);
+        now += 180000;
+        TxOperationIntegrationTestAccess::txTimeoutTick(f.radio);
+        drain();
+        TxOperationIntegrationTestAccess::radioKeyedEdge(f.radio, false);
+        drain();
+    };
+#ifdef HAVE_WEBSOCKETS
+    {
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: the client keys through TciServer");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched(), "TOT/TCI: the expiry latches while the client holds trx true");
+        bool allRefused = true;
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+            drain();
+            TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/TCI: every re-sent trx true after the expiry is refused (d274)");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI: the client's trx false releases the latch");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+        drain();
+        TxOperationIntegrationTestAccess::endTciUnkeyBarrier(server);
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/TCI: a new trx true after the release keys again");
+        TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+        drain();
+    }
+    {
+        // d276: through the native IO path, with TciServer's real 1250 ms
+        // refusal barrier. Re-sends outpace the barrier, so one is still
+        // deferred when the off arrives; the off must release the latch and
+        // the deferred on must never key.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI native: the client keys through the IO path");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");   // refused; arms the refusal barrier
+        send("trx:0,true;");   // deferred behind the barrier
+        AetherTest::pumpFor(400);
+        send("trx:0,true;");   // still deferred
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: re-sends inside the barrier are held");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off while a re-send is still deferred releases the latch (d276)");
+        AetherTest::pumpFor(1400);   // the barrier ends and drains
+        check(!f.commands.contains("mox:on"),
+              "TOT/TCI native: the deferred re-send never keys after the off");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: a new trx true after the off keys");
+        send("trx:0,false;");
+        AetherTest::pumpFor(1400);
+
+        // The d276 sequence: the last re-send was refused and retired, and the
+        // barrier has ended, before the off arrives. The IO path carries no
+        // request for an off, so only the client's producer can release it.
+        send("trx:0,true;");
+        expire(f, now);
+        f.commands.clear();
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI native: each answered re-send is refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(),
+              "TOT/TCI native: an off after the last re-send was answered releases the latch (d276)");
+        AetherTest::pumpFor(1400);
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.commands.contains("mox:on"), "TOT/TCI native: and the next trx true keys");
+        send("trx:0,false;");
+    }
+    {
+        // oz457 on HL2 (4 of 11 expiries re-keyed): a repeat trx true captured
+        // on the I/O path just before the stop is invalidated by it, refused
+        // before admission and retired through retireTrxRequest(). That
+        // teardown is not a release, so the client's next repeat is refused.
+        Fixture f;
+        TciClient socket;
+        TciServer server(&f.radio);
+        TxOperationIntegrationTestAccess::addNativeTciClient(server, socket, f.radio);
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        const auto send = [&](const char* text) {
+            TxOperationIntegrationTestAccess::nativeTciText(server, socket, QString::fromLatin1(text));
+            drain();
+            AetherTest::pumpFor(20);
+        };
+        send("trx:0,true;");
+        check(f.commands.contains("mox:on"), "TOT/TCI captured: the client keys through the IO path");
+        TxOperationIntegrationTestAccess::holdNativeTciText(server, socket);
+        TxOperationIntegrationTestAccess::nativeTciText(server, socket, QStringLiteral("trx:0,true;"));
+        check(TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the repeat is captured on the IO path, not yet promoted");
+        expire(f, now);
+        check(f.radio.txTimeoutLatched()
+                  && !TxOperationIntegrationTestAccess::queuedNativeTciRequest(server, socket).valid(),
+              "TOT/TCI captured: the time-out stop latches and invalidates the captured repeat");
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::releaseNativeTciText(server, socket, false);
+        drain();
+        AetherTest::pumpFor(1400);   // the refusal barrier ends and drains
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the stale repeat is refused and its retirement is not a release");
+        send("trx:0,true;");
+        AetherTest::pumpFor(1400);
+        check(f.radio.txTimeoutLatched() && !f.commands.contains("mox:on"),
+              "TOT/TCI captured: the client's next repeated trx true is still refused");
+        send("trx:0,false;");
+        check(!f.radio.txTimeoutLatched(), "TOT/TCI captured: the client's trx false releases");
+    }
+#endif
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.handleLine("T 1");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/rigctl: every re-sent T 1 after the expiry is refused");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 releases the latch");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: a new T 1 after the release keys again");
+        (void)cat.handleLine("T 0");
+        drain();
+        // A refused T 1 and its T 0 handled in one turn: the off still releases.
+        (void)cat.handleLine("T 1");
+        drain();
+        expire(f, now);
+        (void)cat.handleLine("T 1");
+        (void)cat.handleLine("T 0");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/rigctl: T 0 queued behind a refused T 1 releases");
+        f.commands.clear();
+        (void)cat.handleLine("T 1");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/rigctl: and the next T 1 keys");
+        (void)cat.handleLine("T 0");
+        drain();
+    }
+    {
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        SmartCatProtocol cat(&f.radio);
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: the client keys through its producer");
+        expire(f, now);
+        bool allRefused = f.radio.txTimeoutLatched();
+        for (int i = 0; i != 5; ++i) {
+            f.commands.clear();
+            (void)cat.processCommand("TX");
+            drain();
+            allRefused = allRefused && !f.commands.contains("mox:on") && f.radio.txTimeoutLatched();
+        }
+        check(allRefused, "TOT/SmartCAT: every re-sent TX after the expiry is refused");
+        (void)cat.processCommand("RX");
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX releases the latch");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: a new TX after the release keys again");
+        (void)cat.processCommand("RX");
+        drain();
+        (void)cat.processCommand("TX");
+        drain();
+        expire(f, now);
+        (void)cat.processCommand("TX");   // refused
+        (void)cat.processCommand("RX");   // same turn, same request
+        drain();
+        check(!f.radio.txTimeoutLatched(), "TOT/SmartCAT: RX right after a refused TX releases");
+        f.commands.clear();
+        (void)cat.processCommand("TX");
+        drain();
+        check(f.commands.contains("mox:on"), "TOT/SmartCAT: and the next TX keys");
+        (void)cat.processCommand("RX");
+        drain();
+    }
+    {
+        // CWX is sent text with no off: a CAT client's send_morse during an
+        // over must not hold the latch once the expiry stopped it.
+        Fixture f;
+        qint64 now = 1000000;
+        TxOperationIntegrationTestAccess::txTimeoutClock(f.radio, &now);
+        RigctlProtocol cat(&f.radio);
+        (void)cat.handleLine("\\send_morse CQ CQ");
+        drain();
+        check(f.commands.filter(QRegularExpression(QStringLiteral("^cwx:(?!abort)"))).size() == 1,
+              "TOT/rigctl CWX: send_morse is admitted through the client's producer");
+        expire(f, now);
+        f.commands.clear();
+        const auto desktop = f.radio.localTxController()->capture(TxController::Activity::Mox);
+        const bool latched = f.radio.txTimeoutLatched();
+        check(!latched && desktop.start() && f.commands.contains("mox:on"),
+              "TOT/rigctl CWX: after the expiry, radio idle, local MOX is admitted");
+        desktop.stop();
+        drain();
+    }
+}
+
 void protocolProducerLifetimes()
 {
     const auto drain = [] {
@@ -3336,11 +3637,11 @@ struct DaxTciFixture {
         f.backend->caps.hasDaxStreams = true;
         f.backend->caps.hasMultiClientSessions = true;
         f.backend->caps.audioStreamControl = audioEncoder.capabilities().audioStreamControl;
-        TxOperationIntegrationTestAccess::bindAudioEncoder(f.radio, audioEncoder);
         f.backend->audioWriter = [this](const AudioStreamRequest& request, const AudioStreamCompletion& completion) {
             return audioEncoder.requestAudioStream(request, completion);
         };
         TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
+        TxOperationIntegrationTestAccess::bindAudioEncoder(f.radio, audioEncoder);
         TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
         applyFlexSliceStatus(f.radio, 0, {
             {QStringLiteral("in_use"), QStringLiteral("1")},
@@ -3868,6 +4169,53 @@ void tciHostModulationIgnoresDaxSelection()
         "TCI worker PCM reaches host modulation and the injected audio seam despite blocked DAX selection");
 }
 
+void tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath()
+{
+    // #5985: a PTT owner that goes silent is aborted at the keepalive window,
+    // and the abort reaches TciServer::onClientDisconnected() -> abortTciPtt()
+    // through the worker's clientClosed, with no socket and no peer. The
+    // transport seam never reports the abort, so teardown cannot rest on it.
+    Fixture f;
+    QPointer<TciClient> client = new TciClient;   // onClientDisconnected deleteLater()s it
+    TciServer server(&f.radio);
+    TxOperationIntegrationTestAccess::addNativeTciClient(server, *client, f.radio);
+    TxOperationIntegrationTestAccess::wireTciDisconnect(server, *client);
+    qint64 now = 1000;
+    int pings = 0;
+    int aborts = 0;
+    int edges = 0;
+    QObject::connect(&f.radio, &RadioModel::radioTransmittingChanged, [&edges] { ++edges; });
+    TxOperationIntegrationTestAccess::injectTciKeepAlive(server, *client, &now, &pings, &aborts);
+    const qint64 lastHeard = now;
+    for (; now < lastHeard + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    check(pings == 1 && aborts == 0 && f.commands.isEmpty() && edges == 0,
+          "an idle client gets one probe and nothing keys");
+
+    TxOperationIntegrationTestAccess::nativeTciText(server, *client, QStringLiteral("trx:0,true;"));
+    check(f.commands == QStringList({QStringLiteral("mox:on")}), "fixture: the TCI client owns PTT");
+    // No re-seed: the trx text itself, through receiveText(), renews the deadline.
+    const qint64 keyedAt = now;
+    for (; now < keyedAt + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    check(aborts == 0 && pings == 2 && f.commands == QStringList({QStringLiteral("mox:on")}),
+          "the inbound trx renewed the deadline: one new probe, and the owner stays keyed");
+    TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(aborts == 1 && f.commands == QStringList({QStringLiteral("mox:on"), QStringLiteral("mox:off")}),
+          "at the window the transport is aborted and the owner's PTT is released");
+    for (int i = 0; i < 30; ++i) {
+        now += TciKeepAlive::kPollMs;
+        TxOperationIntegrationTestAccess::tciKeepAliveTick(server);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(aborts == 1 && f.commands.count(QStringLiteral("mox:on")) == 1,
+          "the expired client is not aborted twice and nothing re-keys");
+    delete client.data();
+}
+
 void tciProducerLifetimes()
 {
     // Drive the production server handler with disconnected WebSocket
@@ -4089,6 +4437,36 @@ void tciPromotionRechecksPermissionAfterReply()
 #endif
 } // namespace
 
+// ~RadioModel must unkey a held MOX, whether the model holds the last reference
+// to its local TxController or a GUI copy (TxApplet) outlives it. This backend
+// completes writes synchronously, so it sees exactly one mox:off; a queued
+// transport can see a second, redundant one.
+void teardownReleasesHeldMoxOnce()
+{
+    for (const bool copyOutlivesModel : {false, true}) {
+        QStringList teardown;
+        std::shared_ptr<TxController> outliving;
+        {
+            auto f = std::make_unique<Fixture>();
+            std::shared_ptr<TxController> controller = f->radio.localTxController();
+            (void)controller->capture(TxController::Activity::Mox).start();
+            check(f->commands == QStringList{QStringLiteral("mox:on")},
+                  "teardown fixture: the captured MOX keys once");
+            if (copyOutlivesModel) {
+                outliving = std::move(controller);
+            }
+            controller.reset();
+            f->backend->commands = &teardown;
+            f.reset();
+        }
+        outliving.reset();
+        check(teardown == QStringList{QStringLiteral("mox:off")},
+              copyOutlivesModel
+                  ? "a MOX held through a controller copy that outlives the model unkeys once at teardown"
+                  : "a MOX held through the model's own controller unkeys once at teardown");
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("tx-operation-integration"));
@@ -4108,6 +4486,7 @@ int main(int argc, char** argv)
     queuedPrimaryKeying();
     voiceKeyerDisconnectStopsLikeMox();
     teardownAdmission();
+    teardownReleasesHeldMoxOnce();
     pendingCallbackDisconnectExpiry();
     guiRegistrationDropIsNotARejection();
     expiringCallbackCannotRepopulateTheMap();
@@ -4149,6 +4528,7 @@ int main(int argc, char** argv)
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();
+    txTimeoutLatchThroughProducers();
     producerNormalTails();
     producerTuneAndAtu();
     producerCwxQueue();
@@ -4170,6 +4550,7 @@ int main(int argc, char** argv)
     tciHardwareAndCwIgnoreDaxSelection();
     tciHostModulationIgnoresDaxSelection();
     tciProducerLifetimes();
+    tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();
 #endif

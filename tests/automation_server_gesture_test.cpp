@@ -127,6 +127,7 @@ int main(int argc, char** argv)
     QSlider powerSlider(Qt::Horizontal);
     powerSlider.setObjectName(QStringLiteral("powerSlider"));
     powerSlider.setAccessibleName(QStringLiteral("RF power"));
+    markTxSetpoint(&powerSlider); // as TxApplet does: both drive rails key on it (#5851)
     powerSlider.setRange(0, 100);
     powerSlider.setValue(10);
     layout->addWidget(&powerSlider);

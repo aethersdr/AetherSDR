@@ -22,13 +22,14 @@
 #include "core/MacMicPermission.h"
 #include "core/AppActivity.h"
 #include "core/AutomationServer.h"
+#include "core/control/AppControlHost.h"
 #include "QtPlatformChoice.h"
 
 #ifdef Q_OS_MACOS
 #include "MacStartupAbortGuard.h"
 #endif
 
-#include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/FatalSignalRelease.h"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -516,12 +517,11 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    // Release the Hermes-Lite 2 if this process is killed or crashes: a signal
-    // skips Hl2Backend's destructor, and an HL2 never told to stop keeps streaming,
-    // then ignores discovery until power-cycled. Installed after the macOS startup
-    // guard restores SIGABRT so the guard can't overwrite it. No-op while
-    // disconnected; see Hl2EmergencyStop.h for why it acts inside the handler.
-    AetherSDR::hl2::installEmergencyStopSignalHandlers();
+    // Release the radio if this process is killed: a signal skips every
+    // destructor (an HL2 never told to stop streams on, then ignores discovery
+    // until power-cycled). Installed after the macOS startup guard restores
+    // SIGABRT so the guard can't overwrite it. No-op while disconnected.
+    AetherSDR::installFatalSignalRelease();
 
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);
@@ -840,6 +840,27 @@ int main(int argc, char* argv[])
         const bool bridgePersisted = AetherSDR::AutomationBridgeSettings::enabled();
         if (qEnvironmentVariableIsSet("AETHER_AUTOMATION") || bridgePersisted)
             window.startAutomationBridge();
+
+        // --control-socket <name>: serve aetherd's local v1 control endpoint for
+        // this window's radio, receive verbs only, so an on-radio panel daemon
+        // can drive the radio the app holds (docs/aetherd-app-control-socket.md).
+        // Off unless asked for. Declared after the window, so it goes first.
+        std::unique_ptr<AetherSDR::control::AppControlHost> controlHost;
+        if (const QStringList args = app.arguments();
+            args.contains(QStringLiteral("--control-socket"))) {
+            const QString name = args.value(args.indexOf(QStringLiteral("--control-socket")) + 1);
+            QString error;
+            if (!name.isEmpty() && !name.startsWith(QLatin1Char('-'))) {
+                controlHost = AetherSDR::control::AppControlHost::start(&window.radioModel(), name, &error);
+            } else {
+                error = QStringLiteral("--control-socket needs a name");
+            }
+            if (controlHost) {
+                qInfo() << "local control endpoint:" << controlHost->endpoint();
+            } else {
+                qWarning() << "local control endpoint not served:" << error;
+            }
+        }
 
         exitCode = app.exec();
     }

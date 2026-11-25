@@ -288,7 +288,9 @@ int main(int argc, char** argv)
         Hl2Spectrum dropped(kFft, kFs);
         dropped.setAverageTimeMs(500.0);
         for (int i = 0; i < 20; ++i) dropped.process(oldTone, bins);
+        dropped.discardPartialFrame();   // a retune, as Hl2RxDsp and Hl2Backend do it
         dropped.dropAverage();
+        dropped.restartDc();
         dropped.process(newTone, bins);
         check(bins == raw, "after dropAverage() the next frame is the raw frame, bit for bit");
     }
@@ -348,6 +350,7 @@ int main(int argc, char** argv)
         for (long t = 0; t < 8 * kBlock; t += kBlock)
             dsp.processIqBlock(toneBlock(30, fft, t));
         dsp.dropSpectrumAverage();   // the NCO moved
+        dsp.restartSpectrumDc();
         dsp.setSpectrumRateFps(0);   // the next frame is due at once
         FirstFrame after;
         QObject::connect(&dsp, &Hl2RxDsp::spectrumReady, [&after](const std::vector<float>& b) { after.take(b); });
@@ -365,6 +368,47 @@ int main(int argc, char** argv)
             check(worst < 0.01f,
                   "the first frame after a retune drop is the new axis only, with no held old-axis samples");
         }
+    }
+
+    // ---- 8. a rebuild while keyed keeps the DC estimates and the T/R state --
+    // A pan rate crossing rebuilds every receiver (applyPanBandwidth()), keyed
+    // or not. A fresh spectrum set to "transmitting" would sit in Armed and
+    // learn the keyed DC as receive DC (#7405 review, blocker 1).
+    {
+        Hl2RxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;
+        cfg.audioSampleRateHz = 48000;
+        cfg.dspBlockSize = 1024;
+        cfg.fftSize = 256;
+        cfg.blockForOutput = true;
+        std::string err;
+        Hl2RxDsp dsp;
+        check(dsp.configure(cfg, &err), "configure");
+        auto feed = [&dsp](float scale, int blocks) {
+            for (long t = 0; t < blocks * kBlock; t += kBlock) {
+                auto b = toneBlock(37, 256, t);
+                for (auto& x : b) x *= scale;
+                dsp.processIqBlock(b);
+            }
+        };
+        // Receive: a weak tone, ~-60 dBFS, for over the 1 s DC time constant, so
+        // the receive power is out of its growing-memory phase, as it is on air.
+        feed(2e-3f, 400);
+        dsp.setSpectrumTransmitting(true, 70);
+        check(dsp.spectrumDcKeyedApplied() && !dsp.spectrumDcTransmittingApplied(),
+              "rebuild control: a key arms the spectrum; receive DC until the keyed IQ arrives");
+        feed(1.0f, 40);                        // the keyed IQ, ~54 dB over receive
+        check(dsp.spectrumDcTransmittingApplied(), "rebuild control: the keyed IQ switches it to transmit");
+
+        cfg.inputSampleRateHz = 96000;         // the rate crossing, mid-key
+        cfg.fftSize = 512;
+        check(dsp.configure(cfg, &err), "reconfigure while keyed");
+        check(dsp.spectrumDcTransmittingApplied(),
+              "a rebuild while keyed keeps the transmit DC estimate in use");
+        feed(1.0f, 40);
+        check(dsp.spectrumDcTransmittingApplied(), "and the keyed IQ after it stays on it");
+        dsp.setSpectrumTransmitting(false, 0);
+        check(!dsp.spectrumDcKeyedApplied(), "the unkey after the rebuild returns to receive");
     }
 
     if (g_failures == 0)

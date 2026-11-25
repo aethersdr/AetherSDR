@@ -1,6 +1,6 @@
 #include "GracefulStop.h"
 
-#include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/FatalSignalRelease.h"
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -29,11 +29,11 @@ volatile std::sig_atomic_t g_received = 0; // the first stop signal, 0 before on
 unsigned g_graceSeconds = 0;
 
 // The loop is not going to finish in time, or the operator asked twice: the
-// GUI's path (Hl2EmergencyStop). SIGALRM stands for the stop signal that
+// GUI's path (FatalSignalRelease). SIGALRM stands for the stop signal that
 // started the grace period; a stray one before any stop dies as SIGALRM.
 extern "C" void escalate(int sig)
 {
-    hl2::fireEmergencyStopAndReraise(sig == SIGALRM && g_received ? int(g_received) : sig);
+    fireFatalSignalReleaseAndReraise(sig == SIGALRM && g_received ? int(g_received) : sig);
 }
 
 // Async-signal-safe: write(), alarm() and errno only.
@@ -79,7 +79,7 @@ GracefulStop::GracefulStop(QCoreApplication& app, std::chrono::seconds grace)
 {
     g_graceSeconds = static_cast<unsigned>(grace.count() > 0 ? grace.count() : 1);
     // SIGQUIT (and anything this does not override) keeps the GUI's handler.
-    hl2::installEmergencyStopSignalHandlers();
+    installFatalSignalRelease();
     if (::pipe(g_wake) != 0) {
         QTextStream(stderr) << "aetherd: no stop pipe; a stop signal ends aetherd without releasing the radio\n";
         return;
@@ -95,9 +95,9 @@ GracefulStop::GracefulStop(QCoreApplication& app, std::chrono::seconds grace)
         announceStop();
         QCoreApplication::quit();
     });
-    hl2::installSignalHandlerUnlessIgnored(SIGALRM, escalate);
+    installSignalHandlerUnlessIgnored(SIGALRM, escalate);
     for (const int sig : {SIGTERM, SIGINT, SIGHUP}) {
-        hl2::installSignalHandlerUnlessIgnored(sig, requestStop);
+        installSignalHandlerUnlessIgnored(sig, requestStop);
     }
 }
 
@@ -135,7 +135,7 @@ constexpr DWORD kSessionEndWaitMs = 4000;
 BOOL WINAPI onConsoleControl(DWORD type)
 {
     if (InterlockedExchange(&g_requested, 1) != 0) {
-        hl2::fireEmergencyStop();
+        fireFatalSignalRelease();
         return FALSE; // asked twice: the default handler ends the process
     }
     if (QCoreApplication* app = QCoreApplication::instance()) {
@@ -146,7 +146,7 @@ BOOL WINAPI onConsoleControl(DWORD type)
     const DWORD wait = sessionEnd && g_graceMs > kSessionEndWaitMs ? kSessionEndWaitMs : g_graceMs;
     if (WaitForSingleObject(g_finished, wait) != WAIT_OBJECT_0) {
         // A stuck loop: the same escalation as POSIX's grace alarm.
-        hl2::fireEmergencyStop();
+        fireFatalSignalRelease();
         return FALSE;
     }
     return TRUE;
@@ -157,7 +157,7 @@ BOOL WINAPI onConsoleControl(DWORD type)
 GracefulStop::GracefulStop(QCoreApplication&, std::chrono::seconds grace)
 {
     g_graceMs = static_cast<DWORD>(std::chrono::milliseconds(grace).count());
-    hl2::installEmergencyStopSignalHandlers();
+    installFatalSignalRelease();
     g_finished = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     SetConsoleCtrlHandler(onConsoleControl, TRUE);
 }

@@ -51,7 +51,9 @@
 #include "SpotModel.h"
 #include "CwxModel.h"
 #include "core/TxCoordinator.h"
+#include "TxTimeoutGuard.h"
 #include "DvkModel.h"
+#include "StationAntenna.h"
 #include "UsbCableModel.h"
 #include "DaxIqModel.h"
 #include "NavtexModel.h"
@@ -99,6 +101,7 @@ class AprsDigipeaterModel;
 struct BandStackEntry;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
+class HostCwTextEngine;
 
 struct LicenseFeatureState {
     bool    seen{false};
@@ -653,7 +656,10 @@ public:
     // serial slot), so the TUNE-start refusal cannot slip through the gap
     // between two iambic elements when m_cwKeyActive is momentarily false.
     void    setCwPaddleHeld(bool held) { m_cwPaddleHeld = held; }
+    // Each paddle source's held state per input (keyboard, serial, scoped
+    // controller); its last release releases the time-out latch.
     void setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held);
+    bool producerCwPaddleHeld(const TxCoordinator::Request& anyRequestOfProducer) const;
     void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }
@@ -690,10 +696,8 @@ public:
     void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
 
-    // True when a text command issued through sendCmd() can actually reach the
-    // radio. False for a backend that owns no RadioConnection (HL2 and any
-    // other family that takes typed intents through the IRadioBackend seam) —
-    // there, Flex wire text has nowhere to go and is dropped at the sink.
+    // Whether this session has a Flex transport. All controls still enter
+    // through typed backend intents; this does not expose a wire writer.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing
@@ -725,16 +729,6 @@ public:
     // latches and records nothing.
     bool radioSideRecordingReachable() const { return hasCommandPlane(); }
 
-    // ── Memory command routing ──────────────────────────────────────────────
-    //
-    // Answer a `memory …` command from the local bank or a native writable
-    // radio. Returns the sequence number sendCmd() would have returned
-    // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
-    // writable/native radio backend must take its normal path.
-    // (spelled out rather than the ResponseCallback alias — that is declared
-    // further down this class.)
-    std::optional<quint32> tryMemoryCommand(
-        const QString& command, const RadioConnection::ResponseCallback& cb);
     // Settle which store owns the memory cache for the session being started.
     // Read-only radio snapshots are ingested into the local bank; only a native
     // writable store takes exclusive ownership.
@@ -933,6 +927,32 @@ public:
     bool panTransmitInhibited(const QString& panId) const;
     QString panTransmitInhibitReason(const QString& panId) const;
 
+    // The registry of station devices (RFC #7238): antenna switches outside
+    // the radio, each offered as a submenu of the RX ANT and TX ANT menus
+    // (models/StationAntenna.h). RadioModel names no device; a peripheral
+    // registers under its own `id`, which replaces an earlier entry with that
+    // id. An entry goes when `owner` is destroyed. The owner calls
+    // notifyStationAntennasChanged() whenever its view may have changed.
+    using StationAntennaViewFn = std::function<StationAntennaView()>;
+    using StationAntennaSelectFn = std::function<QString(const QString& token, bool tx)>;
+    void addStationAntennaSource(QObject* owner, const QString& id, StationAntennaViewFn view,
+                                 StationAntennaSelectFn select);
+    // The active views, in registration order; each carries its id.
+    QVector<StationAntennaView> stationAntennaViews() const;
+    // Whether any device is active for the connected radio: its submenu is
+    // shown, with its ports or with the reason it has none to offer now.
+    bool hasStationAntennas() const;
+    // Empty when the pick went out; otherwise the sentence for the operator.
+    // A device or token not on offer is refused, and so is every pick while
+    // the radio may still radiate (keyed, tuning, or in its transmit tail):
+    // the switch would move under RF. Nothing here gates keying.
+    QString selectStationAntenna(const QString& id, const QString& token, bool tx);
+    // Keyed, tuning, MOX, CW key down, the radio's interlock in any state but
+    // a settled receive one (radioReceivingForTransmitDax()), or the backend's
+    // own tail (transmitPathBusy()).
+    bool stationAntennaSwitchBlocked() const;
+    void notifyStationAntennasChanged() { emit stationAntennasChanged(); }
+
     // Multi-Flex slot occupancy.  These let UI distinguish three slot
     // states for any global slice index: ours (we have a SliceModel for
     // it), foreign (another client owns it — we have no SliceModel but
@@ -1052,6 +1072,8 @@ public:
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
     TxCoordinator::Producer registerTxProducer();
+    // A producer under `input`'s actor, for a sequencer keying on its behalf.
+    TxCoordinator::Producer registerTxProducerFor(const TxCoordinator::Request& input);
     // Trusted local operator control surface. UI buttons and equivalent
     // keyboard/MIDI toggles share this producer; external clients must bring
     // their own lifetime instead of borrowing it.
@@ -1088,15 +1110,21 @@ public:
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
     // Host CW text: hostTextGates refuses a key-down unless the TX slice is in
-    // a CW mode and, with break-in off, this host holds MOX/PTT; onDownRefused
-    // runs on the model thread when a key-down is not forwarded, so the text
-    // keyer can end the message. Paddles pass neither.
+    // a CW mode, TUNE is off and, with break-in off, this host holds MOX/PTT;
+    // onDownRefused runs on the model thread when a key-down is not forwarded,
+    // so the text keyer can end the message. Paddles pass neither.
+    // `releaseAt`: a key-down's own key-up instant, when the producer knows it;
+    // on a key-up, the earlier instant a keyer stop cut it to (CwControlRequest).
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
                                 std::chrono::steady_clock::time_point scheduledAt,
                                 bool hostTextGates = false,
-                                std::function<void()> onDownRefused = {});
+                                std::function<void()> onDownRefused = {},
+                                std::chrono::steady_clock::time_point releaseAt = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
+    // An admitted input of `producer` has not finished: its backend still holds
+    // its completion (an HL2 key-up stays held until it is on EP2, #7245).
+    bool txProducerInputPending(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);
     // Best-effort stop of this captured compatibility operation only. This is
@@ -1105,6 +1133,21 @@ public:
     // Explicit local operator override. Also discards pre-admission queued
     // inputs; never exposed as another client's ordinary release operation.
     void cancelLocalTransmit();
+    // Host transmit time-out (RFC #7021): this radio's stored setting, or the
+    // default for it (never shorter than the radio's own interlock timeout).
+    TxTimeoutSettings txTimeoutSettings() const;
+    // Persists to this radio's TxTimeout document; false when not stored.
+    bool setTxTimeoutSettings(const TxTimeoutSettings& settings);
+    // True after an expiry until every input has released and the radio is idle.
+    bool txTimeoutLatched() const { return m_txTimeout.latched(); }
+    // An input's explicit off (TCI trx false, CAT RX, rigctl T 0, a footswitch
+    // edge): always that producer letting go of the time-out latch, whatever
+    // became of its request. Any request of the producer will do. Keys nothing.
+    void noteTxInputReleased(const TxCoordinator::Request& anyRequestOfProducer);
+    // A producer turning down its own key-down before admission (TCI: a stale,
+    // inhibited or contended trx true): the teardown that follows is not that
+    // input letting go of the time-out latch.
+    void noteTxKeyDownRefused(const TxCoordinator::Request& request);
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     // The network_mtu to send for this session: the NetworkMtu setting (or
@@ -1118,6 +1161,15 @@ public:
     int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
+    // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
+    // over from host CW text, which only a local operator input does (#7347 ruling).
+    // While host text plays its key-down is refused with a notice, and the
+    // matching key-up keys nothing. A remote key-up with no accepted remote
+    // key-down before it is ignored while host text plays (logged, no notice):
+    // the text keys its own key-up. The other order is refused too: host text
+    // sent while a CW key is held, remote or local, is refused with
+    // cw-text-refused:key-held (admitHostCwx).
+    void sendRemoteCwKey(bool down, const QString& debugSource);
     void sendCwPaddle(bool dit, bool dah, const QString& debugSource = {},
                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // iambic paddle via netcw stream
     // Lower-level pieces used by the local iambic keyer: PTT and key
@@ -1168,6 +1220,20 @@ public:
                                        bool initializeDisplay = true);
     bool createPanadapter();
     bool removePanadapter(const QString& panId, PanCloseIntent intent = PanCloseIntent::Ordinary);
+    // Why removePanadapter(panId, intent) refuses before reaching the backend,
+    // in the order it checks; None when it would go on (the backend can still
+    // refuse). Transmitting is the keyed TX-pan refusal below.
+    enum class PanCloseRefusal {
+        None, InventoryUncertain, NoSuchPan, NotConnected, StaleSession,
+        RemoveNotSupported, NotOwned, LastPan, Transmitting,
+    };
+    PanCloseRefusal panCloseRefusal(const QString& panId,
+                                    PanCloseIntent intent = PanCloseIntent::Ordinary) const;
+    // True when removePanadapter(panId) would be refused because the pan hosts
+    // the TX slice, the radio is transmitting and the backend declares
+    // PanLifecycleControl::TxPanCloseWhileKeyed::Refused. A caller that tears
+    // down its own state for the pan first (a center lock) checks this.
+    bool keyedTxPanCloseRefused(const QString& panId) const;
     ReceiveDispatch requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
         const RadioControlCompletion& completion = {}, bool announce = true);
     ReceiveDispatch requestPanDimensions(PanadapterModel* pan, int width, int height, int localPoints);
@@ -1176,8 +1242,7 @@ public:
     void setPanDbmRange(float minDbm, float maxDbm);
 
     // The only supported way for a user-intent path to write pan center/
-    // bandwidth/band (#4142). During the profile-load hold (where sendCmd drops
-    // these, #3563) it defers: coalesced per pan and field, model not advanced,
+    // bandwidth/band (#4142). During the profile-load hold it defers: coalesced per pan and field, model not advanced,
     // replayed later. Returns true only if the radio matches the request;
     // optimistic callers must gate on it. bandwidthMhz > 0 sends center+bandwidth
     // as one command. Drag retunes a VFO-slaved scope (Icom); default Range cannot.
@@ -1543,6 +1608,7 @@ signals:
     void antListChanged(QStringList ants);
     // Local AetherSDR display aliases changed. The radio still uses canonical tokens.
     void antennaAliasesChanged();
+    void stationAntennasChanged();
     // (Amplifier presence/state/telemetry signals moved to AmpModel — bind
     //  m_radioModel.amplifier() directly. #4094.)
     void memoryChanged(int index);
@@ -1620,11 +1686,17 @@ signals:
     void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
-    // "pan-tx-inhibit:...") so the UI can classify the notice without sniffing
-    // the localized message text.
+    // "pan-tx-inhibit:...", "tx-failed:N") so the UI can classify the notice
+    // without sniffing the localized message text.
     void interlockNotificationRequested(const QString& message,
                                         const QString& key,
                                         const QString& panId);
+    // Host transmit time-out (RFC #7021). Warning fires once per over, the
+    // configured seconds before expiry; Expired after the stop was requested.
+    void txTimeoutWarning(int secondsLeft);
+    void txTimeoutExpired(int afterSeconds, const QString& keyingSource);
+    void txTimeoutSettingsChanged();
+    void txTimeoutLatchChanged(bool latched);
     // Emitted at most once per transmission when the TX filter is measurably
     // removing the operator's transmit audio (#4649). Carries a ready-to-show
     // operator-facing message naming the offending passband.
@@ -1682,11 +1754,6 @@ signals:
     void radioMessageReceived(const QString& text, MessageSeverity severity);
 
 public:
-    // Send a raw command to the radio. Returns false when the foreign-owner
-    // gate (#3977) or profile-load hold (#4142) drops it, or WAN is down; a
-    // write onto a dead LAN socket still reports dispatched. Callers that
-    // advance local state to match MUST gate on this return.
-    bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
@@ -1727,12 +1794,7 @@ public:
     // .extensionNamespaces"), and a family-string comparison asks a subtly
     // different question. (#5262 M1)
     [[nodiscard]] bool backendDeclaresExtension(const QString& ns) const;
-    // True when the radio speaks the SmartSDR text-command plane — the only
-    // family where sendCmd() reaches anything and a command has a response to
-    // await. Every other backend takes typed intents through the IRadioBackend
-    // seam and settles synchronously in the model, so a caller that awaits a
-    // sendCmd() callback there waits forever. Callers that must work on both
-    // planes branch on this rather than on the family name.
+    // Flex-specific model policy retained until capability routing replaces it.
     bool usesFlexCommandPlane() const { return m_family == QLatin1String("flex"); }
 
     // True when the ENGINE owns display rate shaping rather than the radio —
@@ -1783,7 +1845,6 @@ public:
     void setLineOutPcAudioOffConsent(bool enabled);
 
     // True only when dispatched; the callback reports the later radio reply.
-    bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
     void refreshProfiles();
     bool isProfileTransferBlocked() const;
     bool profileDatabaseImporting() const { return m_profileDatabaseImporting; }
@@ -1961,9 +2022,8 @@ private:
     // Sends the radio auto_black flag from the combined auto-black on/off +
     // client/radio-source state (auto_black=1 only when both select radio-side).
     void applyWaterfallAutoBlack();
-    // The one wire site per key. Without a command plane the text reaches
-    // sendCmd(), which reports it as dropped, only when reportDrop is set: an
-    // operator moved the control and the client did not draw it.
+    // Report unsupported remote controls only for operator intent; client-side
+    // rendering can still apply these values locally.
     void sendWaterfallColorGain(const QString& panId, int gain, bool reportDrop);
     void sendWaterfallBlackLevel(const QString& panId, int level, bool reportDrop);
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
@@ -2029,13 +2089,7 @@ private:
     void disconnectClientHandlesThen(const QList<quint32>& handles,
                                      std::function<void()> continuation = {});
 
-    // Route command to active connection (LAN or WAN)
-    using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
-                    std::optional<SessionCommandGuard> guard = {},
-                    std::function<bool()> dispatchAllowed = {},
-                    bool expireReply = false);
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
                                          const SessionControlCompletion& completion = {});
     // `sub dvk all`, reading the radio's answer for a firmware with no DVK API.
@@ -2093,7 +2147,8 @@ private:
     // supersedes it later. Flex-specific construction wiring (command sinks,
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
-    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family,
+                                                     QString* unavailableReason);
     void handRestoredStateToBackend();  // RFC #4603
     // Put the remembered "Show TX in Waterfall" back into the transmit model
     // on connect, where the backend declares the client its owner.
@@ -2183,8 +2238,6 @@ private:
     RadioConnection*  m_connection{nullptr};   // non-owning — owned by m_backend
     // Sequence counter and callback map — owned by RadioModel on main thread.
     // RadioConnection no longer manages callbacks. (#502)
-    std::atomic<quint32> m_seqCounter{1};
-    QMap<quint32, ResponseCallback> m_pendingCallbacks;
     PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
     // The single live producer feeding rxDemodAudioReady. Held so re-entry can
     // drop the previous one: connecting both producers is the double-feed that
@@ -2270,6 +2323,7 @@ public:
     {
         applyBackendTransmitDelta(delta);
     }
+    bool hasHostCwTextEngineForTest() const { return m_hostCwText != nullptr; }
     void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
     {
         if (m_backend) {
@@ -2298,6 +2352,7 @@ private:
     friend class TuneOutputControlTestAccess;
     friend class TuneOutputDialogTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class FlexCommandTestAccess;
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
@@ -2309,19 +2364,15 @@ private:
         RadioControlFence current;
         RadioControlCompletion completion;
         std::function<void()> written;
-        QPointer<QTimer> deadline;
-        QPointer<WanConnection> wan;
-        quint64 wireGeneration{0};
-        quint32 sequence{0};
         bool delivered{false};
     };
     struct CwAutoTuneOperation;
-    bool dispatchAdministrationCommand(const QString& command,
-        const RadioControlCompletion& completion, const RadioControlFence& current,
-        const std::function<void()>& written);
+    ReceiveDispatch dispatchAdministrationRequest(const RadioControlCompletion& completion,
+        const RadioControlFence& current, const std::function<void()>& written,
+        const std::function<ReceiveDispatch(const RadioControlCompletion&, const RadioControlFence&,
+                                           const std::function<void()>&)>& dispatch);
     void finishAdministrationWrite(quint64 ticket, const RadioControlReply& reply);
     void administrationWriteResult(quint64 ticket, bool written);
-    void forgetAdministrationReply(const PendingAdministrationWrite& operation);
     void reconcileAdministration();
     void resetAdministration(bool notify = true);
     ReceiveDispatch requestAdministrationSetting(const RadioSetupRequest& request,
@@ -2343,12 +2394,8 @@ private:
     friend class TciServerReviewTest;
     friend class TciSpanExtensionTest;
     friend class TransmitDaxHoldTestAccess;
-    void expirePendingCallbacks(const QString& reason);
+    friend class TxTimeoutTestAccess;
 
-    // True only while expirePendingCallbacks() is invoking the drained
-    // callbacks. sendCmd() refuses for the duration so an expiring callback
-    // cannot repopulate the map being drained. (#5653 review)
-    bool m_expiringPendingCallbacks{false};
     // Whether this session's path to the radio runs over Tailscale, decided
     // once at GUI-client registration on this thread (networkMtuParam).
     bool m_pathOverTailnet{false};
@@ -2422,22 +2469,11 @@ private:
     RadioSetupCompletion fencedSetupCompletion(QObject* context,
                                                const RadioSetupCompletion& completion,
                                                bool requiresLiveSession = true);
-    using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
-    using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     // dispatchAllowed, when given, is checked again at the final write.
-    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {},
-                                      std::function<bool()> dispatchAllowed = {});
-    using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
-    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
-    TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
     bool fileTransferEligible(FileTransferPurpose purpose, bool holdingReservation) const;
     FileTransferHandle m_fileTransferOperation;
-    using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
-    AudioCommandSink audioCommandSink();
     // A transverter or USB cable write, refused at the final write once the
     // entity it was aimed at has been removed or replaced.
-    bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
-                                const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2468,12 +2504,21 @@ private:
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
+    TxTimeoutGuard m_txTimeout{[this] { return m_txCoordinator.currentTimeMs(); }};
+    QTimer* m_txTimeoutTimer{nullptr};
+    std::optional<TxTimeoutSettings> m_txTimeoutStored;
+    // Releases made inside a key-down call (a refusal rolling itself back) or
+    // by the time-out's own stop are not an input letting go.
+    int m_txKeyDownDepth{0};
+    bool m_txTimeoutStopping{false};
+    bool m_radioPttObservedDown{false};
+    std::vector<TxCoordinator::Request::Weak> m_txTimeoutRefusedRequests;
+    bool m_txTimeoutRefusedClearQueued{false};
     std::shared_ptr<std::atomic_bool> m_transmitServiceSession{std::make_shared<std::atomic_bool>(true)};
     quint64 m_dvkTxRequest{0};
     quint64 m_navtexTxRequest{0};
     TxCoordinator::Intent m_dvkTxIntent;
     TxCoordinator::Intent m_navtexTxIntent;
-    void wireFlexTransmitServices(FlexBackend* backend);
     void dispatchDvk(const DvkRequest& request, quint64 requestId);
     void dispatchNavtex(const NavtexRequest& request, quint64 requestId);
     TransmitServiceCompletion transmitServiceCompletion(const TransmitServiceCompletion& completion,
@@ -2505,6 +2550,19 @@ private:
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
+    void onTxTimeoutTransmitting(bool transmitting);
+    void onTxTimeoutTick();
+    void expireTransmitTimeout();
+    void loadTxTimeoutSettings();
+    QString txTimeoutKeyingSource() const;
+    bool txTimeoutExemptHolder(const TxCoordinator::Request& request) const;
+    bool txTimeoutCanHold(const TxCoordinator::Request& request);
+    // False when the holder table is full: the key-down must be refused.
+    bool noteTxTimeoutHold(const TxCoordinator::Request& request);
+    void noteTxTimeoutRelease(const TxCoordinator::Request& request);
+    void noteTxTimeoutRefused(const TxCoordinator::Request& request);
+    bool txTimeoutRefused(const TxCoordinator::Request& request) const;
+    void publishTxTimeoutLatch(bool before);
     bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
                          bool askKeyObjection = true);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
@@ -2523,26 +2581,37 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
                                        int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
-    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
+    bool hostCwTextRoute() const;
+    // A CW key or paddle is held: a key element is down, or a paddle is held
+    // between iambic elements (#5422), by any source.
+    bool cwKeyHeld() const;
+    bool admitHostCwx(const TxCoordinator::Request& request, const QString& text,
+                      const std::function<void()>& onAdmitted, int macroIndex, bool live, bool& held);
+    ReceiveDispatch dispatchHostCwxRequest(const CwTextRequest& request);
+    bool dispatchHostCwText(const TxCoordinator::Request& request, const QString& text, int wpm);
+    void startWaitingHostCwx();
+    void hostCwTextEnded(const TxCoordinator::Request& sender, bool refused);
+    void createHostCwTextEngine();
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
-    bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
-                          bool keying, std::function<void()> delivered,
-                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {},
-                          int replyTimeoutMs = 0);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
     CwxModel         m_cwxModel;
+    // Created on connect of a backend with hostCwKeyingControl; closed, key up,
+    // in resetTxOperations() while the coordinator can still deliver the key-up.
+    std::unique_ptr<HostCwTextEngine> m_hostCwText;
+    bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
+    bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
+    bool m_remoteCwKeyDown{false};     // a remote key-down was accepted and is not yet released
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;
@@ -2687,6 +2756,7 @@ private:
     bool        m_txFilterKillReported{false}; // latched, so we speak once per transmission
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
+    quint64     m_txFailedNotices{0};   // makes each "tx-failed:" key distinct
     qint64      m_interlockNotificationArmedUntilMs{0};
     TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
     int         m_digitalVoiceTxSliceId{-1};
@@ -2776,6 +2846,13 @@ private:
     };
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
+    struct StationAntennaSource {
+        QPointer<QObject>      owner;
+        QString                id;
+        StationAntennaViewFn   view;
+        StationAntennaSelectFn select;
+    };
+    std::vector<StationAntennaSource> m_stationAntennaSources;
     struct InhibitedTxSelection {
         int id{-1};
         QPointer<SliceModel> identity;
@@ -2847,7 +2924,7 @@ private:
     bool transmitStartBlockedByKeyObjection(const QString& gate);
     void emitKeyObjectionNotice(const QString& message, const QString& gate);
     void noteLocalTxSliceEnableIntent(int sliceId);
-    void sendSliceCommand(SliceModel* slice, const QString& cmd);
+    bool moxKeysRadioDax() const;
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
     QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
@@ -2882,14 +2959,20 @@ private:
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
-                     const TxCoordinator::Request* request = nullptr);
+                     const TxCoordinator::Request* request = nullptr,
+                     std::chrono::steady_clock::time_point releaseAt = {});
     bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
                          const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                          std::chrono::steady_clock::time_point scheduledAt,
-                         const TxCoordinator::Request* request);
+                         const TxCoordinator::Request* request,
+                         std::chrono::steady_clock::time_point releaseAt);
     bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
+    // A transmit-setup change refused while keyed, as a panadapter Notice.
+    void noticeTransmitChangeRefused(int sliceId, const QString& message);
+    // The TX slice on panId when its keyed close is refused; nullptr otherwise.
+    SliceModel* txSliceRefusingKeyedPanClose(const QString& panId) const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
                                    const QString& panId = QString());
@@ -3119,6 +3202,7 @@ private:
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
     // by every way an attempt can end.
     bool      m_connectAttemptActive{false};
+    quint64   m_connectionIntentRevision{0};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

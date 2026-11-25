@@ -184,9 +184,10 @@ jobs:
       #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
       #             the UI: no gui/ header includes, no QtWidgets.
       #   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ +
-      #             src/models/ + root app-shell files, excluding the backend
-      #             tree) may include a family-specific VENDOR header; the wire
-      #             is reached only through IRadioBackend (RFC step 2.4).
+      #             src/models/ + src/aetherd/ + root app-shell files,
+      #             excluding the backend tree) may include a family-specific
+      #             VENDOR header; the wire is reached only through
+      #             IRadioBackend (RFC step 2.4).
       # Known legacy offenders are tracked in tools/check_engine_boundary.py and
       # warn without blocking; NEW violations fail (--strict). Baselines only
       # shrink. Full-tree scan, stdlib-only.

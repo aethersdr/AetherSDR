@@ -4,6 +4,9 @@
 
 #include <QHash>
 
+#include <algorithm>
+#include <utility>
+
 namespace AetherSDR {
 
 namespace {
@@ -53,6 +56,11 @@ CwxLocalKeyer::~CwxLocalKeyer()
 void CwxLocalKeyer::setOnKeyDownChange(KeyDownCallback cb)
 {
     m_onKeyDownChange = std::move(cb);
+}
+
+void CwxLocalKeyer::setOnDrained(std::function<void()> cb)
+{
+    m_onDrained = std::move(cb);
 }
 
 bool CwxLocalKeyer::canEncode(const QString& text)
@@ -127,6 +135,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
 
     const auto& tbl = morseTable();
     bool firstChar = true;
+    bool endsOnWordGap = false;
     for (QChar ch : text.toUpper()) {
         if (ch == ' ') {
             // Word gap = 7 units total = WordGap (4u, added here) +
@@ -139,6 +148,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
             // also matches standard CW timing for the local sidetone
             // listener.
             m_elements.enqueue(Element::WordGap);
+            endsOnWordGap = true;
             continue;
         }
         const auto it = tbl.find(ch);
@@ -146,6 +156,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
         if (!firstChar)
             m_elements.enqueue(Element::CharGap);
         firstChar = false;
+        endsOnWordGap = false;
         const QString& pattern = it.value();
         for (int i = 0; i < pattern.size(); ++i) {
             if (i > 0)
@@ -153,6 +164,7 @@ void CwxLocalKeyer::encode(const QString& text, int wpm)
             m_elements.enqueue(pattern[i] == '.' ? Element::Dit : Element::Dah);
         }
     }
+    m_owesCharGap = endsOnWordGap && !firstChar;
 }
 
 void CwxLocalKeyer::scheduleNext()
@@ -169,9 +181,18 @@ void CwxLocalKeyer::scheduleNext()
             m_playingChars = havePending ? static_cast<int>(p.text.size()) : 0;
         }
         if (!havePending) {
+            // A drain wakes at the last element's grid deadline: that is its
+            // key-up's instant, as for every other scheduled edge (#7245).
+            const auto lastEdge = m_epochValid ? m_epoch + std::chrono::milliseconds(m_nextEdgeMs)
+                                               : std::chrono::steady_clock::now();
             m_running = false;
             resetEpoch();
-            keyUpIfDown();
+            m_currentlyDown = false;
+            m_drainedUpAt = lastEdge;
+            emitKeyDown(false, lastEdge);
+            if (m_onDrained) {
+                m_onDrained();
+            }
             return;
         }
         // In live mode each keystroke arrives as a separate Pending entry.
@@ -180,11 +201,35 @@ void CwxLocalKeyer::scheduleNext()
         // encoded character is always Dit or Dah, leaving m_currentlyDown=true
         // here; without an explicit gap the key stays down continuously and
         // adjacent characters merge into undecodable noise (#2473).
-        if (m_currentlyDown)
+        // A speed segment that ended on a word gap leaves the key up, so the
+        // key-down test misses it; the next entry's letter still owes the
+        // CharGap that completes the 7u word gap (#2417).
+        if (m_currentlyDown || m_owesCharGap)
             m_elements.enqueue(Element::CharGap);
         encode(p.text, p.wpm);
+        if (!m_epochValid && m_drainedUpAt != std::chrono::steady_clock::time_point{}) {
+            // Played into after a drain: as far from its key-up as a new run (#7245).
+            const auto drainedUpAt = std::exchange(m_drainedUpAt, {});
+            if (m_spacingAfterDrainUnits > 0) {
+                m_notBefore = std::max(m_notBefore,
+                                       drainedUpAt + std::chrono::milliseconds(m_spacingAfterDrainUnits * m_unitMs));
+            }
+        }
         if (m_elements.isEmpty()) {
             scheduleNext();
+            return;
+        }
+    }
+
+    // A run's first element waits for its not-before time, if one was set.
+    if (!m_epochValid && m_notBefore != std::chrono::steady_clock::time_point{}) {
+        const auto notBefore = std::exchange(m_notBefore, {});
+        if (notBefore > std::chrono::steady_clock::now()) {
+            startEpoch();
+            m_nextEdgeMs = std::max<qint64>(
+                0, std::chrono::ceil<std::chrono::milliseconds>(notBefore - m_epoch).count());
+            m_running = true;
+            armTimer(static_cast<int>(std::max<qint64>(1, m_nextEdgeMs)));
             return;
         }
     }
@@ -249,6 +294,8 @@ void CwxLocalKeyer::resetEpoch()
 {
     m_epochValid = false;
     m_nextEdgeMs = 0;
+    m_owesCharGap = false;
+    m_drainedUpAt = {};   // a stop is not a drain; the drain sets it after this
 }
 
 void CwxLocalKeyer::startEpoch()
@@ -268,7 +315,7 @@ void CwxLocalKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point
 void CwxLocalKeyer::keyUpIfDown()
 {
     m_currentlyDown = false;
-    // Stop / abort / drain — not a scheduled edge.  The operator's "stop
+    // Stop / abort — not a scheduled edge.  The operator's "stop
     // sending" silences at the instant it is processed, not at a grid
     // deadline that may still lie in the future. (#4977)
     emitKeyDown(false, std::chrono::steady_clock::now());

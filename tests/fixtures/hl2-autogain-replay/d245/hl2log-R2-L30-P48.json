@@ -1,0 +1,10 @@
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 3839488805, "msg": "HL2 auto RF gain: wideband bandscope enabled for the measured release", "seq": 431, "t": "00:04:03.510", "type": "log"}
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 3839488820, "msg": "HL2 auto RF gain: ARMED at baseline 48 dB, floor 24 dB below", "seq": 432, "t": "00:04:03.510", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3839522314, "msg": "HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 20 / 20 , headroom \"absent\"", "seq": 434, "t": "00:04:03.544", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3839727080, "msg": "HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 20 / 20 , headroom \"absent\"", "seq": 435, "t": "00:04:03.749", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3839922061, "msg": "HL2 auto RF gain: attack 6 dB -> offset 18 dB, window 20 / 20 , headroom \"absent\"", "seq": 436, "t": "00:04:03.944", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3840159088, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 0 / 20 , headroom \"absent\"", "seq": 437, "t": "00:04:04.181", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3958587402, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"12.4\"", "seq": 439, "t": "00:06:02.609", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 3963190608, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 20 , headroom \"5.2\"", "seq": 440, "t": "00:06:07.212", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 4074689680, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"14.9\"", "seq": 441, "t": "00:07:58.711", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 4074888559, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 19 , headroom \"14.9\"", "seq": 442, "t": "00:07:58.910", "type": "log"}

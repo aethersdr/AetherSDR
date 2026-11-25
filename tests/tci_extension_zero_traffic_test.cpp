@@ -11,9 +11,12 @@
 #include "core/TciIoWorker.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/RadioCapabilities.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #if __has_include("core/TciExtensionSet.h")
 #include "core/TciExtensionSet.h"
@@ -66,6 +69,31 @@ public:
 using namespace AetherSDR;
 
 namespace {
+
+// A connected radio that declares TX cutoffs, so the TX passband group is
+// offered. Pre-existing seam API only, like the rest of this file.
+class TxFilterRadio final : public IRadioBackend {
+public:
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        caps.canTransmit = true;
+        caps.hasTxFilterControls = true;
+        return caps;
+    }
+    bool isConnected() const override { return true; }
+    void setTxSlice(int) override {}
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
 
 int g_failures = 0;
 
@@ -134,12 +162,17 @@ struct Probe {
 #endif
 };
 
-// One script, run twice. The peer sends the same plain commands both times;
-// with `peerUsesExtensions` it also enables the set, uses it, malforms it and
-// disables it, across capability edges. Returns what each client received.
-Transcripts runScript(bool peerUsesExtensions)
+// One script, run twice per radio. The peer sends the same plain commands both
+// times; with `peerUsesExtensions` it also enables the set, uses it, malforms
+// it and disables it, across capability edges. With `txFilterRadio` the radio
+// offers the TX passband group and the peer sets it; the desktop moves the TX
+// cutoffs in every run. Returns what each client received.
+Transcripts runScript(bool peerUsesExtensions, bool txFilterRadio)
 {
     RadioModel model;
+    if (txFilterRadio) {
+        model.setBackendForTest(std::make_unique<TxFilterRadio>(), QStringLiteral("test"));
+    }
     QString error;
     model.automationApplySliceFixture(0, QStringLiteral("A"), &error);
     model.automationApplySliceFixture(1, QStringLiteral("B"), &error);
@@ -198,7 +231,14 @@ Transcripts runScript(bool peerUsesExtensions)
     capabilityEdge(false);
     TciServerReviewTest::broadcastStatus(*server);
     plainSends("aethersdr_ext_enable;aethersdr_probe:3;aethersdr_rx_span:0;");
-    model.slice(0)->setNb(true);
+    if (SliceModel* slice = model.slice(0)) {  // no fixture slice on the test radio
+        slice->setNb(true);
+    }
+    if (txFilterRadio) {
+        peerExtension("aethersdr_tx_filter_band:0,1000,1020;aethersdr_tx_filter_band:0,-5,99999;");
+    }
+    model.transmitModel().setTxFilterLow(150);
+    model.transmitModel().setTxFilterHigh(2600);
     settle(600);
     capabilityEdge(true);
     peerExtension("aethersdr_ext_enable:false;aethersdr_probe:4;");
@@ -244,11 +284,13 @@ int main(int argc, char** argv)
     const bool printTranscript = argc > 1 && std::strcmp(argv[1], "--print-transcript") == 0;
 
     check(settingsProfile.isValid(), "isolated settings profile");
-    const Transcripts quiet = runScript(false);
-    const Transcripts busy = runScript(true);
+    const Transcripts quiet = runScript(false, false);
+    const Transcripts busy = runScript(true, false);
+    const Transcripts quietTx = runScript(false, true);
+    const Transcripts busyTx = runScript(true, true);
 
     if (printTranscript) {
-        for (const QString& line : busy.plain) {
+        for (const QString& line : busy.plain + busyTx.plain) {
             std::printf("plain< %s\n", qPrintable(line));
         }
     }
@@ -261,7 +303,7 @@ int main(int argc, char** argv)
     check(hasLineStarting(busy.plain, "rx_nb_enable:"),
           "plain client receives a state-change broadcast");
 
-    check(extensionLines(quiet.plain + busy.plain).isEmpty(),
+    check(extensionLines(quiet.plain + busy.plain + quietTx.plain + busyTx.plain).isEmpty(),
           "plain client never receives an aethersdr_ byte");
     const auto same = [](const Transcripts& quietRun, const Transcripts& busyRun, const char* what) {
         const QStringList a = canonical(quietRun);
@@ -278,6 +320,8 @@ int main(int argc, char** argv)
         }
     };
     same(quiet, busy, "plain client's traffic is identical whatever the peer does with the set");
+    same(quietTx, busyTx,
+         "and with the TX passband group offered, set by the peer and moved by the desktop");
 
 #ifdef HAVE_TCI_EXTENSION_SET
     // The enabled peer shows the same path carried the set to it.
@@ -298,7 +342,23 @@ int main(int argc, char** argv)
     }
     check(!busy.peer.isEmpty() && busy.peer.first().startsWith(QLatin1String("vfo_limits:")),
           "the peer's init burst reaches it through the worker too");
-    check(extensionLines(quiet.peer).isEmpty(), "a peer that never enables receives none");
+    check(extensionLines(quiet.peer + quietTx.peer).isEmpty(),
+          "a peer that never enables receives none");
+
+    // Positive control: on the TX-filter radio the group really was offered
+    // to the enabled peer, and the desktop's change reached it coalesced.
+    const QStringList peerTx = extensionLines(busyTx.peer);
+    const bool offeredTx = std::any_of(peerTx.cbegin(), peerTx.cend(), [](const QString& line) {
+        return line.startsWith(QLatin1String("aethersdr_ext:1,"))
+            && line.contains(QLatin1String("tx_filter_band"));
+    });
+    check(offeredTx && peerTx.contains(QStringLiteral("aethersdr_tx_filter_band:0,150,2600;")),
+          "the enabled peer was offered the TX passband group and heard the coalesced change");
+    if (!offeredTx || !peerTx.contains(QStringLiteral("aethersdr_tx_filter_band:0,150,2600;"))) {
+        for (const QString& line : peerTx) {
+            std::printf("      peer< %s\n", qPrintable(line));
+        }
+    }
 #endif
 
     std::printf("%d failure(s)\n", g_failures);

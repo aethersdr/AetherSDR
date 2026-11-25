@@ -16,7 +16,7 @@ class Hl2TxAlc {
 public:
     struct Settings {
         bool enabled = true;
-        double targetPeak = 0.85;
+        double targetPeak = 0.95;   // Hl2TxDsp::Config::alcTargetPeak
         double releaseSec = 0.500;
         double sampleRateHz = 24000.0;
     };

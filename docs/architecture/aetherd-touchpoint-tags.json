@@ -17,6 +17,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/SquelchGate.h": {
+  "tag": "universal",
+  "note": "Family-neutral squelch gate state (SliceDelta::squelchGate) and its sample-counted publication hold, SquelchGateReporter. No wire text and no family header; the HL2 receive DSP fills it from WDSP fmsq, and RxApplet shows it on the SQL slider.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/WaveformEnvRequest.h": {
   "tag": "universal",
   "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
@@ -425,6 +431,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/FatalSignalRelease.h": {
+  "tag": "universal",
+  "note": "Family-neutral termination-signal release (#7163): the app shells install the SIGTERM/SIGINT/SIGHUP/SIGQUIT handlers, and each backend that holds a radio registers an async-signal-safe release (the HL2 its pre-armed stop datagram). Holds function pointers only; no wire code, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/QtAudioBackendGuard.h": {
   "tag": "ui-support",
   "note": "Pre-QApplication probe that keeps Qt 6.12's QtMultimedia off a PipeWire backend that would crash; client startup plumbing, not radio state.",
@@ -434,6 +446,12 @@
  "core/GreenHeronProtocol.h": {
   "tag": "peripheral(greenheron)",
   "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol \u2014 the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MicrohamTrioSettings.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "Where the microHAM TRIO antenna switch's configuration is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect, and the radio-scoped TrioBinding feature document naming the Trio radio port a radio is cabled to. Peripheral accessory configuration, not radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -479,9 +497,15 @@
   "split": "",
   "confidence": "high"
  },
+ "core/Kpa1500Discovery.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Read-only UDP discovery for the standalone Elecraft KPA1500 amplifier. The Peripherals settings page owns its bounded query sweep; no radio-family wire, backend access or TX authority.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/Kpa1500Connection.h": {
   "tag": "peripheral(kpa1500)",
-  "note": "Direct TCP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
+  "note": "Direct TCP/UDP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },
@@ -1091,6 +1115,18 @@
   "split": "",
   "confidence": "high"
  },
+ "models/MicrohamTrioModel.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "microHAM TRIO client: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it (stored per radio), and this radio's antenna picked from the antenna menus (split implied by RX differing from TX), refused while the radio may radiate. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/MicrohamTrioRadioLink.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "Joins the TRIO model to the connected radio: hands it the radio's settings scope and its transmitting state, and registers the Trio with RadioModel's registry of station devices as a family-neutral station-antenna source (models/StationAntenna.h). RadioModel names no peripheral. Peripheral glue, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/MemoryEntry.h": {
   "tag": "universal",
   "note": "POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) \u2014 canonical memories surface",
@@ -1127,9 +1163,9 @@
   "split": "Core: center/bandwidth, dBm range, antenna list, RF gain, WNB, fps/waterfall cadence. Flex ext: daxiqChannel, clientHandle, VITA-49 stream IDs, loopA/B, preamp string, applyPanStatus/applyWaterfallStatus kv parsing of SmartSDR status.",
   "confidence": "high"
  },
- "models/ProfileLoadCommand.h": {
-  "tag": "vendor(flex)",
-  "note": "Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only",
+ "models/ProfileLoadPolicy.h": {
+  "tag": "universal",
+  "note": "Profile recall timing and topology classification shared by engine policy and presentation; wire classification is private to the Flex backend",
   "split": "",
   "confidence": "high"
  },
@@ -1160,6 +1196,12 @@
  "models/SpotModel.h": {
   "tag": "universal",
   "note": "Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/StationAntenna.h": {
+  "tag": "universal",
+  "note": "Plain data for a station device outside the radio, an antenna switch, as the RX ANT and TX ANT menus offer it in a submenu per device beside the radio's own ports: tokens, labels and the shared refusal sentences, never the device. Family-neutral; a device registers in RadioModel's registry of station devices (addStationAntennaSource), not behind IRadioBackend.",
   "split": "",
   "confidence": "high"
  },
@@ -1381,7 +1423,7 @@
  },
  "core/backends/hl2/Hl2EmergencyStop.h": {
   "tag": "vendor(hl2)",
-  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior invoked from main.cpp's signal handler; pre-existing coupling, frozen into the EB3 baseline. Generalizes to an engine-level 'release every backend on fatal signal' hook.",
+  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle \u2014 reproduced three times). Family wire behavior below the seam: armEmergencyStop() registers fireEmergencyStop() with core/FatalSignalRelease.h, whose handlers the app shells install (#7163), so no file above the seam includes it.",
   "split": "",
   "confidence": "high"
  },
@@ -1841,6 +1883,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/HfGatewayModemModel.h": {
+  "tag": "universal",
+  "note": "Receive-only external modem status, monitoring and configuration for AetherModem. The model owns the host-port client and exposes no radio or transmit control.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/Data2gReceiveModel.h": {
   "tag": "universal",
   "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
@@ -1850,6 +1898,36 @@
  "core/backends/flex/VitaRxReorder.h": {
   "tag": "vendor(flex)",
   "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineCredentials.h": {
+  "tag": "ui-support",
+  "note": "Process-session cache of paired remote-engine records (address, certificate fingerprint, bearer token) that the aetherd family's connect path reads, primed by the connection panel. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineStore.h": {
+  "tag": "ui-support",
+  "note": "Client-side record of paired remote aetherd engines (name, LAN and tailnet addresses, certificate fingerprint) in one settings object, with the token in the OS keychain. Connection plumbing, not live radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineDiscovery.h": {
+  "tag": "ui-support",
+  "note": "Desktop half of aetherd's own LAN advertisement (AETHERD-DISCOVER 1 on UDP 4996), feeding the connection panel's Remote engine section. aetherd's open protocol, not a vendor wire; names engines only and sends nothing to them.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEnginePairing.h": {
+  "tag": "ui-support",
+  "note": "One-shot pairing.complete exchange with a remote aetherd over wss://, pinned by the pairing code's check digits, driven by the connection panel. Credential acquisition plumbing, not a control-protocol client of the radio.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/control/AppControlHost.h": {
+  "tag": "universal",
+  "note": "The desktop app serving aetherd's local v1 control endpoint (--control-socket) for its own radio: the receive targets aetherd binds, over a connection target that only observes the app's connection, with no radio.connect/disconnect, no transmit verbs and no catalogue. Family-neutral; included only by src/main.cpp.",
   "split": "",
   "confidence": "high"
  }

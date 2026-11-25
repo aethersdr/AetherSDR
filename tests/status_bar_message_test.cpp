@@ -1,14 +1,20 @@
 #include "gui/StatusBarMessageOverlay.h"
 #include "gui/StatusBarLayout.h"
 
+#include <QAccessibilityHints>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QStyleHints>
 #include <QTest>
+#include <QVariantAnimation>
+#include <QtMath>
 
 #include <cstdio>
 
@@ -108,6 +114,79 @@ int main(int argc, char** argv)
     check(QApplication::focusWidget() == focus && notice.focusPolicy() == Qt::NoFocus
               && notice.testAttribute(Qt::WA_TransparentForMouseEvents),
           "notices leave focus and pointer input alone");
+
+    notice.setAgentActivity(QStringLiteral("Testing meters"));
+    check(notice.isVisible() && notice.text() == QStringLiteral("Testing meters"),
+          "agent activity appears beside zoom");
+    auto* pulse = notice.findChild<QVariantAnimation*>();
+    auto running = [&] { return pulse && pulse->state() == QAbstractAnimation::Running; };
+    const bool motionAllowed = QGuiApplication::styleHints()->accessibility()->motionPreference()
+                               != Qt::MotionPreference::ReducedMotion;
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return window.windowHandle() == QGuiApplication::focusWindow()
+                                      && running() == motionAllowed; }), "visible activity honors motion preference");
+    QWidget cover;
+    cover.setGeometry(window.frameGeometry());
+    cover.show();
+    cover.raise();
+    cover.activateWindow();
+    check(QTest::qWaitFor([&] { return cover.windowHandle() == QGuiApplication::focusWindow() && !running(); }),
+          "covering the window stops the animation");
+    cover.hide();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "uncovering resumes visible activity");
+    window.showMinimized();
+    check(QTest::qWaitFor([&] { return !running(); }), "minimizing stops the animation");
+    window.showNormal();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "restoring resumes visible activity");
+    window.hide();
+    check(!running(), "hiding stops the animation");
+    window.show();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "showing resumes visible activity");
+    const int activityInset = notice.contentsMargins().left();
+    bar->showMessage(QStringLiteral("Testing meters"));
+    check(notice.contentsMargins().left() < activityInset,
+          "an app notice with the same words removes the activity dot");
+    bar->clearMessage();
+    check(notice.contentsMargins().left() == activityInset, "resuming the step restores the dot");
+    bar->showMessage(QStringLiteral("Operator notice"));
+    notice.setAgentActivity(QStringLiteral("Testing tuning"));
+    check(notice.text() == QStringLiteral("Operator notice"), "app notice takes priority");
+    bar->clearMessage();
+    check(notice.text() == QStringLiteral("Testing tuning"), "only the latest step resumes");
+    // A styled QLabel frame enables automatic indentation by default. Compare
+    // the actual glyphs at the overlay's chosen width with an unconstrained draw.
+    notice.setStyleSheet(QStringLiteral("QLabel { color: palette(window-text); background: palette(window);"
+                                        " border: 1px solid palette(window); font-size: 12px; }"));
+    notice.setAgentActivity(QStringLiteral("Testing meters"));
+    notice.setAgentActivity(QStringLiteral("Testing tuning"));
+    const auto inkPixels = [&notice] {
+        const QImage image = notice.grab().toImage().convertToFormat(QImage::Format_RGB32);
+        const QRgb background = image.pixel(image.width() / 2, 0);
+        int ink = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = qCeil(20 * notice.devicePixelRatioF()); x < image.width(); ++x)
+                if (image.pixel(x, y) != background)
+                    ++ink;
+        return ink;
+    };
+    const int fittedInk = inkPixels();
+    notice.resize(notice.width() + 32, notice.height());
+    check(fittedInk > 0 && fittedInk == inkPixels(),
+          "the fitted status notice paints the complete final glyph");
+    notice.setStyleSheet({});
+    const QString detail = QStringLiteral("Comparing the simulator meter readback with the active slice "
+                                          "before and after tuning to a second signal. ").repeated(2);
+    notice.setAgentActivity(detail);
+    check(notice.width() > 640 && notice.accessibleName() == detail,
+          "agent activity can use the free span beyond the transient notice cap");
+    bar->showMessage(QStringLiteral("Operator notice"));
+    notice.setAgentActivity({});
+    check(notice.text() == QStringLiteral("Operator notice"), "release preserves the app notice");
+    bar->clearMessage();
+    check(!notice.isVisible(), "released activity cannot reappear");
 
     const QString longMessage = QStringLiteral("A long status message ").repeated(100);
     bar->showMessage(longMessage);

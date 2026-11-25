@@ -6,6 +6,7 @@
 #include "core/QsoRecorder.h"
 #include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
+#include "core/TciKeepAlive.h"
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/IRadioBackend.h"
@@ -132,6 +133,158 @@ private:
 class TciServerReviewTest
 {
 public:
+    // #5985: the keepalive deadline, socket-free. The state machine probes
+    // after the idle interval, aborts at the silent-drop window, and any frame
+    // heard from the peer (a pong included) resets it.
+    static bool keepAliveProbesAfterIdleAndAbortsAtTheWindow()
+    {
+        using K = TciKeepAlive;
+        K k(0);
+        for (qint64 t = 0; t < K::kIdleMs; t += 250) {
+            if (k.poll(t) != K::Action::None) { return false; }
+        }
+        if (k.poll(K::kIdleMs) != K::Action::Ping || !k.probing()) { return false; }
+        // One probe outstanding at a time; nothing more until the window.
+        for (qint64 t = K::kIdleMs + 1; t < K::kSilentDropWindowMs; t += 250) {
+            if (k.poll(t) != K::Action::None) { return false; }
+        }
+        if (k.poll(K::kSilentDropWindowMs) != K::Action::Abort || !k.expired()) { return false; }
+        // Abort is reported once, and a late frame cannot revive the client.
+        k.heard(K::kSilentDropWindowMs + 1);
+        for (qint64 t = K::kSilentDropWindowMs; t < 4 * K::kSilentDropWindowMs; t += 500) {
+            if (k.poll(t) != K::Action::None) { return false; }
+        }
+        return k.expired();
+    }
+
+    static bool keepAliveAnyFrameResetsTheDeadline()
+    {
+        using K = TciKeepAlive;
+        K k(0);
+        // A pong (or any frame) after each probe keeps the client indefinitely.
+        qint64 t = 0;
+        int pings = 0;
+        for (int round = 0; round < 20; ++round) {
+            for (qint64 step = 0; step <= K::kIdleMs; step += 500) {
+                t += 500;
+                const K::Action a = k.poll(t);
+                if (a == K::Action::Abort) { return false; }
+                if (a == K::Action::Ping) { ++pings; k.heard(t + 200); }
+            }
+        }
+        // Traffic before the idle interval means no probe at all.
+        K busy(0);
+        for (qint64 u = 0; u < 10 * K::kSilentDropWindowMs; u += 1000) {
+            busy.heard(u);
+            if (busy.poll(u + 999) != K::Action::None) { return false; }
+        }
+        // A frame heard just before the window restarts the whole interval.
+        K late(0);
+        if (late.poll(K::kIdleMs) != K::Action::Ping) { return false; }
+        late.heard(K::kSilentDropWindowMs - 1);
+        if (late.probing() || late.poll(K::kSilentDropWindowMs) != K::Action::None) { return false; }
+        const qint64 resumed = K::kSilentDropWindowMs - 1;
+        if (late.poll(resumed + K::kIdleMs) != K::Action::Ping) { return false; }
+        return pings >= 20 && !k.expired()
+            && late.poll(resumed + K::kSilentDropWindowMs) == K::Action::Abort;
+    }
+
+    // A probe that goes out late, after a stall on our side, is still given
+    // its minimum wait before the client is dropped.
+    static bool keepAliveLateProbeGetsItsPongWait()
+    {
+        using K = TciKeepAlive;
+        K k(0);
+        const qint64 stalled = K::kSilentDropWindowMs - 1000;
+        if (k.poll(stalled) != K::Action::Ping) { return false; }
+        if (k.poll(K::kSilentDropWindowMs) != K::Action::None) { return false; }
+        if (k.poll(stalled + K::kMinimumPongWaitMs - 1) != K::Action::None) { return false; }
+        return k.poll(stalled + K::kMinimumPongWaitMs) == K::Action::Abort;
+    }
+
+    // The worker acts on the decision: it pings through the transport, and at
+    // the deadline it ABORTS (never a graceful close) and reports the close
+    // itself, so the controller's PTT abort runs even when the dead peer's
+    // socket never emits disconnected. A client already closing gracefully is
+    // escalated, not skipped.
+    static bool keepAliveDeadlineAbortsAndReportsTheClose()
+    {
+        for (const bool transportReports : {false, true}) {
+            for (const bool alreadyClosing : {false, true}) {
+                TciIoWorker worker;
+                qint64 now = 0;
+                int pings = 0;
+                int aborts = 0;
+                int closes = 0;
+                int closeCode = -1;
+                worker.m_keepAliveNow = [&now] { return now; };
+                worker.m_keepAlivePing = [&pings](quint64) { ++pings; };
+                worker.m_keepAliveAbort = [&](quint64 id) {
+                    ++aborts;
+                    if (transportReports) { worker.socketDisconnected(id); }
+                };
+                QObject::connect(&worker, &TciIoWorker::clientClosed, &worker,
+                    [&](quint64, int code, int, const QString&) { ++closes; closeCode = code; });
+                TxCoordinator coordinator([](const auto&, auto) {});
+                const auto actor = coordinator.registerActor({true, 0});
+                TciIoWorker::Client client;
+                client.lifetime = std::make_shared<TciClientLifetime>();
+                client.producer = coordinator.registerProducer(actor);
+                client.keepAlive = TciKeepAlive(now);
+                const quint64 id = client.lifetime->id;
+                const auto producer = client.producer;
+                worker.m_clients.insert(id, client);
+                if (alreadyClosing) {
+                    worker.closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData,
+                                       QStringLiteral("test backlog"));
+                }
+
+                // A live peer's frames keep it alive with no probe. A closing
+                // peer's frames are dropped unread and do not: it is aborted one
+                // window after the close although it keeps writing.
+                qint64 abortedAt = -1;
+                for (; now < 3 * TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+                    worker.heardFrom(id);
+                    worker.checkKeepAlive();
+                    if (aborts == 1 && abortedAt < 0) { abortedAt = now; }
+                }
+                if (alreadyClosing) {
+                    if (pings != 0 || aborts != 1 || closes != 1
+                        || abortedAt != TciKeepAlive::kSilentDropWindowMs || producer.valid()
+                        || closeCode != int(QWebSocketProtocol::CloseCodeAbnormalDisconnection)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (pings != 0 || aborts != 0 || closes != 0) { return false; }
+                // Silence: one probe, then the abort.
+                const qint64 lastHeard = now - TciKeepAlive::kPollMs;
+                for (; now < lastHeard + TciKeepAlive::kSilentDropWindowMs; now += TciKeepAlive::kPollMs) {
+                    worker.checkKeepAlive();
+                }
+                if (pings != 1 || aborts != 0 || closes != 0) { return false; }
+                worker.checkKeepAlive();
+                if (aborts != 1 || closes != 1
+                    || closeCode != int(QWebSocketProtocol::CloseCodeAbnormalDisconnection)) {
+                    return false;
+                }
+                // Retired once: no second close or abort, nothing re-armed.
+                for (int i = 0; i < 30; ++i) {
+                    now += TciKeepAlive::kPollMs;
+                    worker.heardFrom(id);
+                    worker.checkKeepAlive();
+                }
+                worker.socketDisconnected(id);
+                const auto it = worker.m_clients.constFind(id);
+                if (aborts != 1 || closes != 1 || producer.valid()
+                    || it == worker.m_clients.cend() || it->lifetime->live.load()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     static bool freeDvModeAliasesPreserveSidebands()
     {
         struct ModeEntry {
@@ -3522,6 +3675,19 @@ int main(int argc, char** argv)
     std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
                 tciSwrGated ? "PASS" : "FAIL");
 
+    const bool keepAliveIdle = AetherSDR::TciServerReviewTest::keepAliveProbesAfterIdleAndAbortsAtTheWindow();
+    const bool keepAliveReset = AetherSDR::TciServerReviewTest::keepAliveAnyFrameResetsTheDeadline();
+    const bool keepAliveLate = AetherSDR::TciServerReviewTest::keepAliveLateProbeGetsItsPongWait();
+    const bool keepAliveAbort = AetherSDR::TciServerReviewTest::keepAliveDeadlineAbortsAndReportsTheClose();
+    std::printf("%s  keepalive probes after the idle interval, aborts at the window (#5985)\n",
+                keepAliveIdle ? "PASS" : "FAIL");
+    std::printf("%s  keepalive: a pong or any frame resets the deadline (#5985)\n",
+                keepAliveReset ? "PASS" : "FAIL");
+    std::printf("%s  keepalive: a late probe still gets its pong wait (#5985)\n",
+                keepAliveLate ? "PASS" : "FAIL");
+    std::printf("%s  keepalive deadline aborts and reports the close itself (#5985)\n",
+                keepAliveAbort ? "PASS" : "FAIL");
+
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
@@ -3529,7 +3695,8 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
+    return keepAliveIdle && keepAliveReset && keepAliveLate && keepAliveAbort
+        && workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
         && deferredAbort && unownedAudioRefused && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin

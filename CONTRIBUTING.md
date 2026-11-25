@@ -170,6 +170,8 @@ policy, and how to recover a red `main` — see
 - **Large reformatting PRs.** Fix style only in files you're modifying.
 - **UX, visual, or architecture changes without an approved RFC.** Open
   a `[RFC]` issue first — see [GOVERNANCE.md](GOVERNANCE.md).
+- **TCI extensions beyond TCI 2.1 without an approved RFC and items
+  (a)–(e).** See [AGENTS.md](AGENTS.md) §"TCI extensions beyond TCI 2.1".
 
 ---
 

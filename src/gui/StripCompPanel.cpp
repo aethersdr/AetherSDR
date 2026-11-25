@@ -241,6 +241,8 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
     m_phase = makeKnob("Phase");
     m_phase->setRange(0.0f, 6.0f);
     m_phase->setDefault(0.0f);
+    // Whole stages: the engine rounds, so a 1% step would snap back.
+    m_phase->setPhysicalStep(1.0f);
     m_phase->setLabelFormat([](float v) {
         const int stages = static_cast<int>(std::round(v));
         return (stages == 0) ? QString("Off")

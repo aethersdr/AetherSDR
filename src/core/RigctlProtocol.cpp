@@ -290,7 +290,7 @@ RigctlProtocol::~RigctlProtocol()
     if (m_model) {
         QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest,
                                             hostCwText = std::move(m_hostCwText)] {
-            (void)model->setProducerTransmit(request, false);
+            (void)model->setProducerTransmit(request, false, TransmitModel::PttSource::Cat);
             model->abortProducerCwx(cwx);
             if (hostCwText) {
                 hostCwText->close();
@@ -1030,9 +1030,14 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     } else if (!request.valid()) {
         return rprt(-1);
     }
-    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive, request]() {
+    const TxCoordinator::Request release = tx ? TxCoordinator::Request{} : m_txProducer.request();
+    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive, request,
+                                        release]() {
         if (tx && !request.valid()) {
             return;
+        }
+        if (!tx) {
+            model->noteTxInputReleased(release);
         }
         // Non-split: ensure this protocol's bound slice is the TX slice so the
         // correct slice is used for transmission. Split: leave the split TX slice
@@ -1048,7 +1053,7 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
             if (slice && !slice->isTxSlice())
                 slice->setTxSlice(true);
         }
-        (void)model->setProducerTransmit(request, tx, TransmitModel::PttSource::Dax);
+        (void)model->setProducerTransmit(request, tx, TransmitModel::PttSource::Cat);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

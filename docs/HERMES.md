@@ -734,8 +734,8 @@ convergence must be verified on real hardware through the automation bridge.
   this host — so the operator's mode and threshold live in the client's
   operating-state document or nowhere. They ride the RFC #4603 `Agc` domain as
   typed universal fields (`RestoredRadioState::agcMode` /
-  `agcThreshold` — 0..100 operator units, NOT dB; the backend multiplies by
-  `kAgcCeilingDbPerUnit` to reach real dB), captured on every `setSliceAgc` and
+  `agcThreshold` — 0..100 operator units, NOT dB; the backend maps them to
+  real dB with `Hl2DbReference::agcCeilingDbAtReference()`), captured on every `setSliceAgc` and
   seeded back onto **every** receiver by `Hl2Backend::seedReceiverAgc()`.
 - **"Flat" means ONE remembered pair, not one AGC.** The runtime control is
   per-receiver — `setSliceAgc(sliceId, …)` resolves `ddcForSlice()` and writes a
@@ -1681,7 +1681,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
 | 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
-| 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |
+| ~~22~~ | ~~Hardware-managed T/R LNA gain (`0x0e[15]`)~~ **DONE** | A2 §A2 | The round robin's `0x0e` bank is `ccTxLnaGain()`: while the receive gain is above `kRxGainDuringTxCapDb` (+8 dB) it sets `[15]`, `[14]` and the cap's code in `[13:8]`, and `ad9866.v` (FAST_LNA) swaps that gain in for exactly the time `tx_en` is high, so the restore needs no host edge. At or below the cap, and with PureSignal on (its keyed `0x0a` bank owns the gain), the bank stays all-zero. Always on, no setting (`Hl2RxGainDuringTx.h` has the derivation). Limits: a SLOW_LNA gateware ignores `0x0e`; and with the receive gain above the cap, CW keyed on the radio's own jack (`cw_on`) runs at the cap instead of the gateware's built-in `-12 dB`, because `[15]` serves both; and `ad9866.v` clears `en_tx_gain` only at configuration, not on run/stop, so after a disconnect at a gain above the cap the radio keeps the +8 dB keyed gain, and another client inherits it, until a client writes `0x0e` or the radio is power-cycled | — |
 | 23 | PureSignal | O §11, A1 §B6 | **DONE**. HL2 wire facts (consulted from MI0BOT's Thetis fork, see THIRD_PARTY_LICENSES): `0x0a` C2 bit 6 enables the feedback path, DDC2 carries the coupler feedback and DDC3 the TX DAC reference, keyed LNA gain is `19 - att` (att -28..31). WDSP `calcc` runs the calibration and the correction. `Hl2PureSignal` is an original controller built on calcc's `SetPSControl` / `GetPSInfo` interface: `Hl2PsController` turns Off / Auto / Single / Restore into calcc control flags and follows calcc's state, and `Hl2PsGain` moves the keyed feedback gain after each calcc attempt whose level is outside 128 < fb <= 181. The stream is floored at four DDCs while PS is on, so the slice ceiling drops to 2 and spans that cannot carry four DDCs refuse it. Controls live in the PureSignal applet (HL2 only). Row 22 is not a prerequisite for this path: the keyed gain is written per MOX edge from the host | L |
 
 ### Tier 5 — the RX audio bus (added after the §18 audit)
@@ -1860,6 +1860,62 @@ keeps both workflows consistent:
   manual MOX/PTT envelope;
 - the EP2 builder generates a zero-offset carrier at the TX NCO with a 5 ms
   raised-cosine edge, paced by the fixed 48 kHz transmit stream;
+- a keyer edge carries its scheduled instant (`CwControlRequest::scheduledAt`),
+  and `MetisClient` applies it at that instant's EP2 sample plus
+  the edge lead plus the over's shift (#5065). The lead is the operator's
+  setting (`Hl2Settings::cwEdgeLeadMs`, the `Hl2` object's `cwEdgeLeadMs`,
+  0..100 ms, default 40; `cwlead.get` / `cwlead.set`, #7245): applied at once
+  between overs and when the over ends during one, so an over never changes
+  lead. 0 is safe (a late edge shifts the over, lengths exact); 100 keeps the
+  lead plus the largest shift inside the 32-edge schedule at host text's 100 WPM. A key-down also
+  carries its own key-up instant (`CwControlRequest::releaseAt`), so both edges
+  are scheduled when the element is admitted and its length never depends on
+  the key-up's own GUI hop. A key-down that arrives after its sample is never
+  dropped or truncated: it and every later edge of the over move later by the
+  lateness (the shift only grows until the over ends), so only the space before
+  it is longer; past `kCwMaxEdgeShiftMs` (250 ms) it is refused and the over
+  has no carrier until it ends, with one "TX failed" notice per over
+  (`MetisClient::cwOverRefused` → `IRadioBackend::transmitFailed` → the
+  `tx-failed:` interlock notice); MOX still falls with the break-in hang. The
+  over ends at `clearCwKeying()`, or in `MetisClient::buildNextControlPacket`
+  once CW mode is off (its operation lapsed), MOX is down and no key-down
+  whose operation is still live is pending. That second path does what
+  `clearCwKeying()` does to the schedule and shift: it drops the remaining
+  (stale) edges with their completions, clears the shift and the refusal and
+  applies a lead asked for during the over, so the next over keys at its own
+  timing. A lapse while MOX stays up (manual MOX, or the break-in hang, which
+  holds the last key-up's completion and so its operation) is a gap inside
+  the over and keeps all of it. A
+  keyer stopped mid-element keeps the element's deadline as the key-up's
+  `scheduledAt` (as for every other backend) and carries the stop instant in
+  `releaseAt`; the HL2 keys up there. The break-in hang counts from the shifted key-up's wire
+  instant. A late key-up without a release is applied at once; a scheduled
+  key-down is forced up after a 5 WPM dah plus the default lead. Admission of each
+  element stays on the engine-owning thread. A scheduled key-up carries the
+  element's completion, and `MetisClient` holds it until that key-up (or the
+  element's own release) is written to EP2 and its 5 ms fall has ended, so
+  the model ends the element's intent only once it is on the wire; a flush
+  drops it. A key-up written while
+  a later edge is pending keeps the held CW operation the next key-down
+  entered with, so a host-text element's 5 ms fall is never cut by its own
+  completion. Host CW text (`HostCwTextEngine`) ends a run when its keyer
+  drains, and fences the run's producer only once no element of it is
+  pending (under break-in, the hang's end), so its last element, still a lead
+  away from EP2 when the keyer drains, goes out whole; the next text starts a
+  word space after it; a stop or refusal ends the run at once. Edges without an instant (straight key, TCI `keyer:`) take
+  effect on the next frame built: an unscheduled key-down flushes pending
+  scheduled edges and is a hold of its own, kept while its own operation
+  permits dispatch, so a paddle's release clears only the paddle's
+  contribution; an unscheduled key-up ends every hold. With key sources
+  overlapping, the last one wins: an unscheduled key-down drops the keyer
+  elements already inside the edge lead and keeps the carrier on through its
+  hold, and an unscheduled key-up cuts a keyer element in progress. Unkeying manual
+  MOX/PTT (break-in off) flushes the schedule at once: the operator's unkey
+  wins, so an element still inside the lead (plus any shift) is cut or not
+  sent. The
+  `cwlead.get` / `cwlead.set` requests from the HL2 Hardware page use their
+  own request-id range, `0x08…` (`hl2_cw_element_completion_test` pins the
+  completion, hold and fall behaviour);
 - CW owns the IQ payload until that PTT envelope ends, so queued microphone IQ
   cannot leak into inter-element spaces;
 - both MOX and carrier generation remain behind `MetisClient`'s final

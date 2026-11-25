@@ -1,0 +1,21 @@
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 1182169071, "msg": "HL2 auto RF gain: wideband bandscope enabled for the measured release", "seq": 143, "t": "23:19:46.183", "type": "log"}
+{"cat": "aether.hl2", "lvl": "I", "mono_us": 1182169092, "msg": "HL2 auto RF gain: ARMED at baseline 48 dB, floor 24 dB below", "seq": 144, "t": "23:19:46.183", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1182233710, "msg": "HL2 auto RF gain: attack 6 dB -> offset 6 dB, window 19 / 19 , headroom \"absent\"", "seq": 146, "t": "23:19:46.248", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1182464229, "msg": "HL2 auto RF gain: attack 6 dB -> offset 12 dB, window 19 / 19 , headroom \"absent\"", "seq": 147, "t": "23:19:46.478", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1182667205, "msg": "HL2 auto RF gain: attack 6 dB -> offset 18 dB, window 19 / 19 , headroom \"absent\"", "seq": 148, "t": "23:19:46.681", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1182863356, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 0 / 19 , headroom \"absent\"", "seq": 149, "t": "23:19:46.877", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1214171997, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"12.6\"", "seq": 150, "t": "23:20:18.186", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1216735227, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 3 / 20 , headroom \"4.6\"", "seq": 151, "t": "23:20:20.749", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1247167724, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"14.0\"", "seq": 152, "t": "23:20:51.182", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1275301631, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 20 , headroom \"1.4\"", "seq": 153, "t": "23:21:19.316", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1305504958, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"12.9\"", "seq": 154, "t": "23:21:49.519", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1309397135, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 19 , headroom \"2.7\"", "seq": 155, "t": "23:21:53.411", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1339601144, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 20 , headroom \"12.9\"", "seq": 156, "t": "23:22:23.615", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1348900938, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 19 , headroom \"6.7\"", "seq": 157, "t": "23:22:32.915", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1379102631, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 20 , headroom \"13.3\"", "seq": 159, "t": "23:23:03.117", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1384231524, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 20 , headroom \"3.0\"", "seq": 160, "t": "23:23:08.246", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1414434089, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"12.9\"", "seq": 161, "t": "23:23:38.448", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1419432913, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 20 , headroom \"5.2\"", "seq": 162, "t": "23:23:43.447", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1449627444, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 19 , headroom \"11.9\"", "seq": 163, "t": "23:24:13.641", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1452830785, "msg": "HL2 auto RF gain: attack 6 dB -> offset 24 dB, window 1 / 20 , headroom \"5.1\"", "seq": 164, "t": "23:24:16.845", "type": "log"}
+{"cat": "aether.hl2", "lvl": "D", "mono_us": 1486196523, "msg": "HL2 auto RF gain: release -6 dB -> offset 18 dB, window 0 / 20 , headroom \"11.9\"", "seq": 165, "t": "23:24:50.211", "type": "log"}

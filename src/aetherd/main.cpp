@@ -2,7 +2,7 @@
 #include "CredentialStartup.h"
 #include "GracefulStop.h"
 #include "GrantAdminClient.h"
-#include "core/backends/hl2/Hl2Backend.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/control/ControlCredentialVault.h"
 #include "core/control/ControlEngine.h"
 #include "core/control/LocalControlServer.h"
@@ -10,6 +10,7 @@
 #include "core/control/RadioCatalogue.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/control/RemoteControlServer.h"
+#include "core/control/DiscoveryResponder.h"
 #include "core/control/VaultPairingIssuer.h"
 #endif
 #include "core/discovery/DirectedDiscoveryAddress.h"
@@ -19,6 +20,8 @@
 #include <QElapsedTimer>
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QHostInfo>
+#include <QJsonObject>
 #include <QLockFile>
 #include <QTextStream>
 
@@ -231,6 +234,8 @@ int main(int argc, char* argv[])
     std::unique_ptr<AetherSDR::control::VaultPairingIssuer> pairingIssuer;
     std::unique_ptr<RemoteControlServer> secureServer;
     std::unique_ptr<RemoteControlServer> tailnetServer;
+    std::unique_ptr<AetherSDR::control::DiscoveryResponder> advertisement;
+    QString secureUrl;
     const auto openRemote = [&](RemoteControlServer::Mode mode, const RemoteControlServer::Endpoint& endpoint,
                                 const char* scheme) -> std::unique_ptr<RemoteControlServer> {
         auto remote = std::make_unique<RemoteControlServer>(controlEngine, mode);
@@ -267,6 +272,10 @@ int main(int argc, char* argv[])
             return 1;
         }
         QTextStream(stderr) << "aetherd: remote certificate SHA-256 " << fingerprint << '\n';
+        const QString host = secureEndpoint->address.protocol() == QAbstractSocket::IPv6Protocol
+            ? QStringLiteral("[%1]").arg(secureEndpoint->address.toString())
+            : secureEndpoint->address.toString();
+        secureUrl = QStringLiteral("wss://%1:%2").arg(host).arg(secureServer->serverPort());
     }
     if (tailnetEndpoint) {
         tailnetServer = openRemote(RemoteControlServer::Mode::Tailnet, *tailnetEndpoint, "ws");
@@ -279,9 +288,9 @@ int main(int argc, char* argv[])
     // Constructors/settings imports can pump nested event loops. Reserving
     // the endpoint closes early arrivals without admitting sessions, so no
     // client can race the one-shot target binding or see partial resources.
-    // No HL2 TX grant can exist here (independentTxReady), so the HL2 is
+    // No host-keyed TX grant can exist here (independentTxReady), so the HL2 is
     // receive only, and its receive controls qualify without idle readback.
-    AetherSDR::hl2::Hl2Backend::setHostOffersTransmit(false);
+    AetherSDR::setHostOffersTransmit(false);
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
@@ -335,6 +344,35 @@ int main(int argc, char* argv[])
             return 1;
         }
     }
+    // Advertising follows the TLS listener (aetherd-remote-backend.md §1). It
+    // is a convenience: if the port is taken, clients can still type the address.
+    if (secureServer) {
+        AetherSDR::control::DiscoveryResponder::Config advertised;
+        advertised.name = QHostInfo::localHostName();
+        advertised.wssUrl = secureUrl;
+        advertised.certificateSha256 = RemoteControlServer::certificateSha256(*tlsIdentity);
+        AetherSDR::control::ControlResourceStore* store = &server.resourceStore();
+        advertised.radio = [store] {
+            const auto session = store->get({QStringLiteral("radioSession"), {}, QStringLiteral("radio-1")});
+            if (!session) { return AetherSDR::control::DiscoveryResponder::Radio{}; }
+            return AetherSDR::control::DiscoveryResponder::Radio{
+                session->value.value(QStringLiteral("identity")).toObject()
+                    .value(QStringLiteral("model")).toString(),
+                session->value.value(QStringLiteral("family")).toString(),
+                session->value.value(QStringLiteral("connected")).toBool()};
+        };
+        advertisement = std::make_unique<AetherSDR::control::DiscoveryResponder>(std::move(advertised));
+        QString advertiseError;
+        if (advertisement->start(&advertiseError)) {
+            QTextStream(stderr) << "aetherd: advertising " << secureUrl << " on UDP "
+                                << AetherSDR::control::DiscoveryResponder::kPort << '\n';
+        } else {
+            QTextStream(stderr) << "aetherd: cannot advertise on UDP "
+                                << AetherSDR::control::DiscoveryResponder::kPort << ": " << advertiseError
+                                << "; clients must type the address\n";
+            advertisement.reset();
+        }
+    }
 #endif
     // A stop that arrived during startup could not quit a loop that was not
     // running yet; teardown below still releases whatever was set up.
@@ -342,6 +380,7 @@ int main(int argc, char* argv[])
     // The server was constructed first; stop delivery before target/model
     // teardown rather than relying on reverse local-variable destruction.
 #ifdef HAVE_WEBSOCKETS
+    if (advertisement) { advertisement->stop(); }
     if (tailnetServer) { tailnetServer->close(); }
     if (secureServer) { secureServer->close(); }
 #endif

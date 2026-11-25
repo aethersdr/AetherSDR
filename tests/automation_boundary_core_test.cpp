@@ -3,6 +3,7 @@
 // DEXP omission on the sim backend, and the titlebar/applet deferral contract. Requests go straight to handleLine; no
 // listener, socket, network peer or real radio is involved, and TX permission
 // is only granted on a model with no transport behind it.
+#include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
 // AutomationServer's QPointer members require these complete types.
 #include "core/AudioEngine.h"
@@ -15,6 +16,8 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QLocalSocket>
+#include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -31,15 +34,23 @@ class AutomationServerTestAccess
 public:
     using Wait = AutomationServer::ConnectWait;
 
-    static QJsonObject request(AutomationServer& server, const QJsonObject& request)
+    static QJsonObject request(AutomationServer& server, const QJsonObject& request,
+                               QLocalSocket* owner = nullptr)
     {
         return server.handleLine(QJsonDocument(request).toJson(QJsonDocument::Compact),
-                                 nullptr);
+                                 owner);
     }
     static QJsonObject request(AutomationServer& server, const QByteArray& line)
     {
         return server.handleLine(line, nullptr);
     }
+    static QLocalSocket* disconnectableClient(AutomationServer& server)
+    {
+        auto* client = new QLocalSocket(&server);
+        QObject::connect(client, &QLocalSocket::disconnected, &server, &AutomationServer::onDisconnected);
+        return client;
+    }
+    static QTimer* activityTimer(AutomationServer& server) { return server.m_activityTimer; }
     static std::shared_ptr<Wait> addWait(AutomationServer& server)
     {
         auto wait = std::make_shared<Wait>();
@@ -109,6 +120,94 @@ QJsonObject tuneWithId(const QJsonValue& id)
         request.insert(QStringLiteral("id"), id);
     }
     return request;
+}
+
+void agentActivity()
+{
+    AutomationServer server;
+    QLocalSocket first, second; // Unconnected objects supply distinct connection identities.
+    QStringList changes;
+    QObject::connect(&server, &AutomationServer::agentActivityChanged,
+                     [&](const QString& text, const QString&) { changes.append(text); });
+    auto report = [&](QLocalSocket& client, const QString& text) {
+        return Access::request(server, {{"cmd", "agentActivity"}, {"text", text}}, &client);
+    };
+    QTimer* timer = Access::activityTimer(server);
+    check(timer->interval() == 300000 && !timer->isActive(), "claim starts unowned with a five-minute timeout");
+    timer->setInterval(100); // Exercise the real expiry handler without waiting five minutes.
+    server.setReadOnly(true);
+    check(!ok(report(first, "Testing meters")) && changes.isEmpty(), "observe-only bridge refuses claim");
+    server.setReadOnly(false);
+    check(ok(report(first, "Testing meters")) && changes == QStringList{"Testing meters"}, "first report claims");
+    const auto initialTimer = timer->id();
+    check(errorOf(report(second, "Testing tuning")) == "busy" && errorOf(report(second, "")) == "busy",
+          "other connection cannot update or release");
+    Access::request(server, {{"cmd", "get"}, {"model", "radio"}}, &first);
+    check(!ok(Access::request(server, {{"cmd", "agentActivity"}, {"action", "renew"}}, &first)),
+          "implicit renew request is refused");
+    check(!ok(report(first, QStringLiteral("\u202e\u2066\n"))) && timer->id() == initialTimer
+              && changes == QStringList{"Testing meters"},
+          "ordinary work, competing claims and invalid reports preserve the deadline and activity");
+    check(ok(report(first, "Testing meters")) && timer->id() != initialTimer && changes.size() == 1,
+          "repeating an explicit report renews without another announcement");
+    const QString boundary = QString(63, u'm') + QStringLiteral("\U0001f4fb");
+    check(ok(report(first, QStringLiteral("\u202d\u202e\u2066\u0085\t") + boundary + "extra"))
+              && changes.last() == boundary, "strip controls before the 64-code-point cap, preserving the final emoji");
+    const QJsonObject spaced = report(first, QStringLiteral("Tuning\tSlice\nA\u200b B"));
+    check(ok(spaced) && changes.last() == QStringLiteral("Tuning Slice A B")
+              && spaced.contains(QStringLiteral("expiresInMs")),
+          "whitespace controls separate words before other controls are stripped");
+    check(pumpUntil([&] { return changes.last().isEmpty(); }), "expiry clears the connected owner's activity");
+    check(ok(report(second, "Testing tuning")) && errorOf(report(first, "")) == "busy",
+          "stale owner cannot clear a replacement claim");
+    check(ok(report(second, "")) && ok(report(second, "")) && changes.last().isEmpty() && !timer->isActive(),
+          "explicit release clears the claim and is repeatable");
+    check(!report(second, "").contains(QStringLiteral("expiresInMs")), "a release reports no claim lifetime");
+    auto* owner = Access::disconnectableClient(server);
+    auto* observer = Access::disconnectableClient(server);
+    check(ok(report(*owner, "Testing meters")), "disconnect fixture claims");
+    const auto claimTimer = timer->id();
+    observer->disconnected();
+    check(changes.last() == "Testing meters" && timer->id() == claimTimer,
+          "unrelated disconnect preserves the claim and deadline");
+    owner->disconnected();
+    check(changes.last().isEmpty() && !timer->isActive(), "owner disconnect clears activity immediately");
+
+    check(ok(report(first, "Testing tuning")), "new owner can claim after disconnect");
+    check(!ok(report(first, QStringLiteral("\u200b\ufeff"))) && changes.last() == "Testing tuning",
+          "zero-width-only report preserves the previous activity");
+    server.setReadOnly(true);
+    check(changes.last().isEmpty() && !timer->isActive(), "observe-only transition clears the claim");
+    server.setReadOnly(false);
+    check(ok(report(first, "Testing tuning")), "owner can claim after observe-only ends");
+    server.setAuthToken("new-token");
+    check(changes.last().isEmpty() && !timer->isActive(), "token rotation clears the claim");
+    check(errorOf(Access::request(server, QJsonObject{{"cmd", "agentActivity"}}, &first)).startsWith("unauthorized"),
+          "unauthenticated malformed report gets the token error");
+    server.setAuthToken({});
+    check(ok(report(first, "Testing tuning")), "owner can claim before stop");
+    server.stop();
+    check(changes.last().isEmpty() && !timer->isActive(), "stopping the bridge clears the claim");
+}
+
+void agentStationRename()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    QStringList shown; // Outlives the server, whose destructor clears the held claim.
+    AutomationServer server;
+    server.setRadioModel(&radio);
+    QLocalSocket owner; // Unconnected; it only supplies the claim identity.
+    QObject::connect(&server, &AutomationServer::agentActivityChanged,
+                     [&](const QString& text, const QString& agent) { shown.append(text + u'|' + agent); });
+    const QJsonObject idle = Access::request(server, {{"cmd", "station"}, {"value", "Idle"}}, &owner);
+    check(ok(idle) && shown.isEmpty(), "a rename without a claim announces nothing", idle);
+    check(ok(Access::request(server, {{"cmd", "agentActivity"}, {"text", "Testing meters"}}, &owner)),
+          "claim before the rename");
+    const QJsonObject renamed = Access::request(server, {{"cmd", "station"}, {"value", "Codex"}}, &owner);
+    check(ok(renamed) && shown.last() == QStringLiteral("Testing meters|Codex")
+              && backend->commands.last().contains(QLatin1String("Codex")),
+          "a rename during a claim reaches the badge", renamed);
 }
 
 void interlockProbe()
@@ -433,10 +532,14 @@ void fmRepeaterAndTransmit()
     boundary("slice offset up inf", QStringLiteral("frequency"));
     boundary("slice offset down 5 typo", QStringLiteral("unexpected"));
 
-    check(errorOf(send("transmit rfpower 40")).contains(QStringLiteral("ALLOW_TX")),
-          "transmit rfpower is TX-gated");
-    check(errorOf(send("transmit rfpower 9999")).contains(QStringLiteral("ALLOW_TX")),
-          "the TX gate answers before value validation");
+    // Drive is not keying: without TX permission rfpower still sets the
+    // setpoint, bounded by the ceiling, never by permission (#5851).
+    {
+        const QJsonObject noPermission = send("transmit rfpower 40");
+        check(ok(noPermission) && radio.transmitModel().rfPower() == 40,
+              "transmit rfpower without TX permission sets drive", noPermission);
+    }
+    boundary("transmit rfpower 9999", QStringLiteral("0..100"));
     boundary("transmit wattage 5", QStringLiteral("rfpower|tunepower"));
     boundary("transmit", QStringLiteral("requires an action"));
 
@@ -591,6 +694,8 @@ int main(int argc, char** argv)
     }
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
+    agentActivity();
+    agentStationRename();
     interlockProbe();
     jsonIdAndMhzContract();
     memoryActivate();

@@ -6,6 +6,7 @@
 #include <QScopeGuard>
 #include "ControlAvailabilityRegistry.h"
 #include "AntennaChoiceGate.h"
+#include "StationAntennaMenu.h"
 #include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
 #ifdef HAVE_CW_RX_BACKENDS
@@ -26,6 +27,7 @@
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -63,6 +65,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMenu>
+#include <QToolTip>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QDialog>
@@ -119,65 +122,6 @@ protected:
     }
 private:
     const float& m_value;
-};
-
-// Slider that resets to a default value on double-click.
-// Extends GuardedSlider for controls-lock support (#745).
-class ResetSlider : public GuardedSlider {
-public:
-    explicit ResetSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : GuardedSlider(o, parent), m_resetVal(resetVal) {}
-protected:
-    void mouseDoubleClickEvent(QMouseEvent*) override { setValue(m_resetVal); }
-private:
-    int m_resetVal;
-};
-
-// ResetSlider filled from the centre outward with a centre-mark dot, for pan /
-// balance controls. Over-paints the stylesheet's (0 -> handle) sub-page with
-// groove colour, then fills (centre -> handle) in accent, clipped around the
-// handle disc.
-class CenterMarkSlider : public ResetSlider {
-public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        ResetSlider::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        auto& tm = AetherSDR::ThemeManager::instance();
-        const int cx = width() / 2;
-        const int cy = height() / 2;
-        const int grooveY = cy - 2;
-
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        const QRect handleRect = style()->subControlRect(
-            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
-        const int handleCx = handleRect.center().x();
-
-        QPainterPath clip;
-        clip.addRect(rect());
-        QPainterPath handlePath;
-        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
-        p.setClipPath(clip.subtracted(handlePath));
-
-        p.setPen(Qt::NoPen);
-        if (handleCx < cx) {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, handleCx, 4));
-            p.setBrush(tm.color("color.accent"));
-            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
-        } else {
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, cx, 4));
-        }
-
-        p.setBrush(QColor("#608090"));
-        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
-    }
 };
 
 // Button that paints a solid left- or right-pointing triangle.
@@ -808,21 +752,27 @@ void VfoWidget::buildUI()
             return;
         }
         QPointer<SliceModel> slice = m_slice;
+        const QVector<StationAntennaView> stations =
+            m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+        const bool station = !stations.isEmpty();
+        const bool published = !slice->rxAntennaList().isEmpty()
+            || (m_radioModel && !m_radioModel->antennaList().isEmpty());
         // Nothing real to choose -- the radio published no port and no Kiwi
-        // receiver is on offer: refuse visibly instead of opening a menu of
-        // invented ANT1/ANT2 whose pick moves the label and nothing else.
+        // receiver or station switch is on offer: refuse visibly instead of
+        // opening a menu of invented ANT1/ANT2 whose pick moves the label only.
         {
             const bool connected = m_radioModel && m_radioModel->isConnected();
-            const bool published = !slice->rxAntennaList().isEmpty()
-                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
             const bool virtualAntennas = m_kiwiSdrManager
                 && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-            if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+            if (rxAntennaChoiceRefused(connected, published, virtualAntennas, station)) {
                 emit antennaChoiceRefused(false);
                 return;
             }
         }
-        QStringList menuOptions = rxAntennaOptions();
+        // With a station switch and no port of the radio's own, the switch's
+        // ports are the whole list: no invented radio port beside them.
+        QStringList menuOptions =
+            published || !station ? rxAntennaOptions() : QStringList{};
         if (m_kiwiSdrManager) {
             for (const QString& ant : m_kiwiSdrManager->virtualAntennaTokens()) {
                 if (!ant.isEmpty() && !menuOptions.contains(ant)) {
@@ -830,7 +780,7 @@ void VfoWidget::buildUI()
                 }
             }
         }
-        if (menuOptions.isEmpty()) {
+        if (menuOptions.isEmpty() && !station) {
             menuOptions << QStringLiteral("ANT1") << QStringLiteral("ANT2");
         }
         const QString activeKiwiProfile =
@@ -856,11 +806,25 @@ void VfoWidget::buildUI()
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
+        // A Kiwi receiver on this slice is what it hears: no switch port is checked.
+        addStationAntennaMenus(*menu, stations, false, activeKiwiProfile.isEmpty());
         connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
             if (!sel || !slice) {
                 return;
             }
             const QString token = sel->data().toString();
+            if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                const QString refusal = m_radioModel
+                    ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
+                    : QString();
+                // Only a pick that was taken ends the slice's Kiwi receiver.
+                if (refusal.isEmpty()) {
+                    emit flexRxAntennaSelected(slice->sliceId());
+                } else {
+                    showStationAntennaRefusal(m_rxAntBtn, refusal);
+                }
+                return;
+            }
             const QString profileId = m_kiwiSdrManager
                 ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                 : QString();
@@ -886,11 +850,14 @@ void VfoWidget::buildUI()
         QPointer<SliceModel> slice = m_slice;
         // Same rule for TX, without the Kiwi escape: a virtual receiver is
         // never a transmit destination (AntennaChoiceGate.h).
+        const QVector<StationAntennaView> stations =
+            m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+        const bool station = !stations.isEmpty();
+        const bool published = !m_slice->txAntennaList().isEmpty()
+            || (m_radioModel && !m_radioModel->antennaList().isEmpty());
         {
             const bool connected = m_radioModel && m_radioModel->isConnected();
-            const bool published = !m_slice->txAntennaList().isEmpty()
-                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
-            if (txAntennaChoiceRefused(connected, published)) {
+            if (txAntennaChoiceRefused(connected, published, station)) {
                 emit antennaChoiceRefused(true);
                 return;
             }
@@ -898,7 +865,8 @@ void VfoWidget::buildUI()
         QMenu* menu = new QMenu(m_txAntBtn);
         menu->setToolTipsVisible(true);  // raw token behind the alias (#5546)
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
-        const QStringList options = txAntennaOptions();
+        const QStringList options =
+            published || !station ? txAntennaOptions() : QStringList{};
         for (const QString& ant : options) {
             auto* act = menu->addAction(antennaMenuLabel(ant, options));
             act->setData(ant);
@@ -907,11 +875,22 @@ void VfoWidget::buildUI()
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        connect(menu, &QMenu::triggered, this, [slice](QAction* sel) {
+        addStationAntennaMenus(*menu, stations, true);
+        connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
             if (!sel || !slice) {
                 return;
             }
-            slice->setTxAntenna(sel->data().toString());
+            const QString token = sel->data().toString();
+            if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                const QString refusal = m_radioModel
+                    ? m_radioModel->selectStationAntenna(pick->id, pick->token, true)
+                    : QString();
+                if (!refusal.isEmpty()) {
+                    showStationAntennaRefusal(m_txAntBtn, refusal);
+                }
+                return;
+            }
+            slice->setTxAntenna(token);
         });
         menu->popup(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
     });
@@ -1753,6 +1732,7 @@ void VfoWidget::buildTabContent()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
+        m_panSlider->setAccessibleName(tr("Audio pan"));
         applyPrimarySliderStyle(m_panSlider);
         panRow->addWidget(m_panSlider, 1);
         auto* panR = new QLabel("R");
@@ -2252,10 +2232,17 @@ void VfoWidget::buildTabContent()
         }
 
         // DSP button tooltips
-        m_nrBtn->setToolTip("Radio-side noise reduction \u2014 attenuates uncorrelated background noise.");
+        // Not "radio-side": on a radio that sends IQ (HL2, ANAN, RTL) this is the
+        // NR inside this computer's receive channel, and the AetherRX modules are
+        // a different stage with similar names, so the tooltip says which is which.
+        m_nrBtn->setToolTip("Receiver noise reduction \u2014 attenuates uncorrelated background noise. "
+                            "Runs in the radio, or, for a radio that sends IQ, in this computer's receive "
+                            "channel, so TCI clients and decoders get the processed audio too. "
+                            "Not the AetherRX modules (NR2, RN2, ...), which run later, on the audio this computer plays.");
         m_nbBtn->setToolTip("Noise blanker \u2014 detects and removes fast impulse noise from sparks and switching sources. "
                             "Where this host runs the blanker, clicking again selects NB2, which reconstructs the blanked window instead of silencing it.");
-        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones.");
+        m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones. "
+                             "Runs in the radio, or, for a radio that sends IQ, in this computer's receive channel.");
         m_apfBtn->setToolTip("CW audio peaking filter \u2014 narrows the audio passband around the CW pitch frequency to improve S/N.");
         m_nrlBtn->setToolTip("Leaky LMS adaptive filter \u2014 preserves correlated signals while removing uncorrelated noise. Best for daily SSB/CW.");
         m_nrsBtn->setToolTip("Spectral subtraction with voice activity detection \u2014 cuts noise most aggressively between words.");
@@ -7137,6 +7124,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         disconnect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateDspParameterResetControls);
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
+        disconnect(m_radioModel, &RadioModel::stationAntennasChanged, this, nullptr);
         disconnect(m_radioModel, &RadioModel::infoChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::connectionStateChanged,
@@ -7182,16 +7170,14 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
         m_filterAvailability->registerRestriction(m_txAntBtn,
             tr("This radio is receive-only; no transmit antenna is available"),
-            [](bool connected, const RadioCapabilities& caps) {
-                return !connected || caps.canTransmit;
-            });
+            txAntennaFieldAvailable);
         m_filterAvailability->registerRestriction(m_rxAntBtn,
             tr("This receiver has one fixed receive input"),
             [this](bool connected, const RadioCapabilities& caps) {
                 const bool virtualAntennas = m_kiwiSdrManager
                     && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-                return !connected || caps.canTransmit || !m_slice
-                    || m_slice->rxAntennaList().size() != 1 || virtualAntennas;
+                return rxAntennaFieldAvailable(connected, caps, m_slice, virtualAntennas,
+                    m_radioModel && m_radioModel->hasStationAntennas());
             });
         using Feature = ReceiveDspControl::Feature;
         const auto signalAvailable = [this](bool connected, const RadioCapabilities& caps, Feature feature) {
@@ -7259,6 +7245,12 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &VfoWidget::updateAntennaButtons);
+        // Re-evaluate the RX ANT restriction first (a switch bound later opens
+        // it), then redraw, so a lifted restriction does not restore a stale tooltip.
+        connect(m_radioModel, &RadioModel::stationAntennasChanged, this, [this] {
+            if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
+            updateAntennaButtons();
+        });
         // Rebuild the DAX list when the radio (hence its capacity) becomes known.
         connect(m_radioModel, &RadioModel::infoChanged,
                 this, &VfoWidget::populateDaxCombo);
@@ -7610,6 +7602,18 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
         : QStringLiteral("%1 antenna port: %2")
               .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
                    full));
+
+    // A Kiwi receiver on this slice still wins for RX.
+    if (profileId.isEmpty()) {
+        if (const auto station = stationAntennaField(m_radioModel, m_slice, tx)) {
+            const QString stationText =
+                fm.elidedText(station->text, Qt::ElideRight, kMaxWidth - kPad);
+            button->setText(stationAntennaActionText(stationText));
+            button->setFixedWidth(
+                qBound(kMinWidth, fm.horizontalAdvance(stationText) + kPad, kMaxWidth));
+            button->setToolTip(station->toolTip);
+        }
+    }
     if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 

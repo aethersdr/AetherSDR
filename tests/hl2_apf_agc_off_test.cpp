@@ -44,6 +44,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -68,6 +69,17 @@ struct Hl2ApfAgcOffTestAccess {
         return true;
     }
     static void tearDown(Hl2Backend& backend) { backend.tearDownReceivers(); }
+    // How many NR and ANF pushes receiver 0's chain has received, read on its
+    // own thread after everything queued ahead of it.
+    static std::pair<int, int> nrAnfDeliveries(Hl2Backend& backend)
+    {
+        std::pair<int, int> n{-1, -1};
+        Hl2RxDsp* dsp = backend.m_rx[0].dsp;
+        QMetaObject::invokeMethod(dsp, [&n, dsp] {
+            n = {dsp->noiseReductionDeliveries(), dsp->autoNotchDeliveries()};
+        }, Qt::BlockingQueuedConnection);
+        return n;
+    }
 };
 
 }  // namespace AetherSDR::hl2
@@ -479,6 +491,58 @@ int main(int argc, char** argv)
         check(near(c.value(QStringLiteral("apfCenterHz")), 750.0),
               "centred on the pitch moved while the slice was out of CW, not the "
               "one it left CW with");
+
+        // The channel NR/ANF reported beside the APF: requested, in circuit, level.
+        using AetherSDR::SliceDspRequest;
+        const auto dspOn = [&backend](SliceDspRequest::Feature feature, int level) {
+            SliceDspRequest on{};
+            on.feature = feature;
+            on.field = SliceDspRequest::Field::Enabled;
+            on.enabled = true;
+            backend.requestSliceDsp(0, on);
+            SliceDspRequest lvl = on;
+            lvl.field = SliceDspRequest::Field::Level;
+            lvl.level = level;
+            backend.requestSliceDsp(0, lvl);
+        };
+        c = rx0();
+        check(!c.value(QStringLiteral("nrRun")).toBool()
+                  && !c.value(QStringLiteral("anfRun")).toBool(),
+              "the chain reports NR and ANF off by default");
+        dspOn(SliceDspRequest::Feature::Nr, 70);
+        dspOn(SliceDspRequest::Feature::Anf, 30);
+        c = rx0();
+        check(c.value(QStringLiteral("nrRun")).toBool()
+                  && c.value(QStringLiteral("nrLevel")).toInt() == 70
+                  && c.value(QStringLiteral("anfRequested")).toBool()
+                  && !c.value(QStringLiteral("anfRun")).toBool()
+                  && c.value(QStringLiteral("anfLevel")).toInt() == 30,
+              "in CW the chain runs NR and holds ANF out of circuit, at their levels");
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        c = rx0();
+        check(c.value(QStringLiteral("nrRun")).toBool() && c.value(QStringLiteral("anfRun")).toBool(),
+              "in USB both run");
+        // Each request re-sends its own stage only: WDSP's SetRXAANRVals and
+        // SetRXAANFVals flush the LMS taps, so an NR drag that re-sent ANF would
+        // let the carrier ANF had converged on back in (#7423 review, blocker 2).
+        const auto [nr0, anf0] = Hl2ApfAgcOffTestAccess::nrAnfDeliveries(backend);
+        for (int level = 71; level <= 80; ++level) {
+            SliceDspRequest tick{};
+            tick.feature = SliceDspRequest::Feature::Nr;
+            tick.field = SliceDspRequest::Field::Level;
+            tick.level = level;
+            backend.requestSliceDsp(0, tick);
+        }
+        const auto [nr1, anf1] = Hl2ApfAgcOffTestAccess::nrAnfDeliveries(backend);
+        check(nr1 - nr0 == 10, "control: ten NR level ticks reach the chain as ten NR pushes");
+        check(anf1 == anf0, "an NR level drag re-sends no ANF, so ANF keeps its converged notch");
+        SliceDspRequest anfTick{};
+        anfTick.feature = SliceDspRequest::Feature::Anf;
+        anfTick.field = SliceDspRequest::Field::Level;
+        anfTick.level = 35;
+        backend.requestSliceDsp(0, anfTick);
+        const auto [nr2, anf2] = Hl2ApfAgcOffTestAccess::nrAnfDeliveries(backend);
+        check(anf2 - anf1 == 1 && nr2 == nr1, "and an ANF level re-sends no NR");
         QObject::disconnect(capture);
         Hl2ApfAgcOffTestAccess::tearDown(backend);
     }

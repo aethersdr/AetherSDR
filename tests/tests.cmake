@@ -187,11 +187,11 @@ get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS
 
 # ── aether_non_test_targets: everything the root declared before this file ───
 # Built from the same baseline, so the production/test boundary has one
-# definition. ci.yml builds this instead of `all`, on pull requests and main:
-# it runs none of the tests, and compiling and linking them was most of its build
-# time. Every default-built executable and library the root CMakeLists.txt
-# declares above include(tests/tests.cmake) joins without a CI edit. Custom
-# targets and targets from add_subdirectory() build only when a collected
+# definition. CI's Linux PR job builds this target. CI's macOS job builds it
+# alongside its gate tests on PRs and main. Full Suite builds the Linux
+# default graph on main. Default-built executables and libraries the root
+# CMakeLists.txt declares above include(tests/tests.cmake) join without a CI
+# edit. Custom targets and targets from add_subdirectory() build only when a collected
 # target depends on them; everything declared in this file, tests and tools
 # such as kiwi_directory_poc alike, is left out.
 add_custom_target(aether_non_test_targets)
@@ -612,6 +612,17 @@ target_include_directories(control_remote_pairing_test PRIVATE src)
 target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
+# aetherd's LAN advertisement (aetherd-remote-backend.md §1): the probe format,
+# the reply's contents and size, the rate bound, and the source-address and
+# WireGuard-interface filters, socket-free; then one probe over 127.0.0.1 to a
+# responder bound on an EPHEMERAL port (never the fixed 4996). Skips (77) when
+# it cannot bind.
+add_executable(aetherd_discovery_responder_test tests/aetherd_discovery_responder_test.cpp)
+target_include_directories(aetherd_discovery_responder_test PRIVATE src)
+target_link_libraries(aetherd_discovery_responder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME aetherd_discovery_responder_test COMMAND aetherd_discovery_responder_test)
+set_tests_properties(aetherd_discovery_responder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
@@ -622,6 +633,14 @@ target_include_directories(local_control_server_test PRIVATE src)
 target_link_libraries(local_control_server_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME local_control_server_test COMMAND local_control_server_test)
+
+# The app serving aetherd's local control endpoint (--control-socket,
+# docs/aetherd-app-control-socket.md). Binds a current-user QLocalServer named
+# app-ctl-<random> and fails immediately if the endpoint cannot be reserved.
+add_executable(app_control_host_test tests/app_control_host_test.cpp)
+target_include_directories(app_control_host_test PRIVATE src tests)
+target_link_libraries(app_control_host_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME app_control_host_test COMMAND app_control_host_test)
 
 # Opaque byte relay pump/state machine (CTR2 TCP proxy prototype) with
 # injected scripted transports; binds no sockets.
@@ -1584,12 +1603,22 @@ target_link_libraries(anan_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME anan_rxdsp_fm_limiter_test COMMAND anan_rxdsp_fm_limiter_test)
 
 # ANAN backend -- IRadioBackend implementor. Pieces testable without a live
-# radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
-# passband-reset-only-on-actual-mode-change idempotence rule.
+# radio: capabilities() defaults, mode-string parsing, CW BFO math, the
+# passband-reset-only-on-actual-mode-change idempotence rule, and RX2's open,
+# close and restore with its DSP builds held (no socket, no WDSP build).
 add_executable(anan_backend_test tests/anan_backend_test.cpp)
 target_include_directories(anan_backend_test PRIVATE src tests)
 target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_backend_test COMMAND anan_backend_test)
+
+# The speaker mix of host-demodulated receivers (ANAN's RX1 + RX2): one
+# receiver passed through untouched, the aligned sum and its clamp, the stall
+# lag, whole frames, activation. Pure: no Qt, no DSP.
+add_executable(receiver_audio_mixer_test
+    tests/receiver_audio_mixer_test.cpp
+    src/core/ReceiverAudioMixer.cpp)
+target_include_directories(receiver_audio_mixer_test PRIVATE src)
+add_test(NAME receiver_audio_mixer_test COMMAND receiver_audio_mixer_test)
 
 # Socket-free NB publication/readback: actual backend and DSP, injected model
 # connection receipts and direct bridge dispatch; no transport is started.
@@ -1979,10 +2008,39 @@ target_include_directories(hl2_rxdsp_agc_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_agc_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_agc_test COMMAND hl2_rxdsp_agc_test)
 
+# The multi-slice speaker mix keeps one slice bit-identical and stops two
+# AGC-levelled slices passing full scale at high AGC ceilings: real Hl2RxDsp
+# chains into Hl2Backend::mixReceiverAudio(), offline, socket-free.
+add_executable(hl2_rx_mix_headroom_test tests/hl2_rx_mix_headroom_test.cpp)
+target_include_directories(hl2_rx_mix_headroom_test PRIVATE src)
+target_link_libraries(hl2_rx_mix_headroom_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_mix_headroom_test COMMAND hl2_rx_mix_headroom_test)
+
 add_executable(hl2_rxdsp_notch_audio_test tests/hl2_rxdsp_notch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_notch_audio_test COMMAND hl2_rxdsp_notch_audio_test)
+
+# The HL2 receive channel's own NR (WDSP ANR) and auto notch (ANF), measured
+# on the audio through the real Hl2RxDsp.
+add_executable(hl2_rxdsp_channel_nr_anf_test tests/hl2_rxdsp_channel_nr_anf_test.cpp)
+target_include_directories(hl2_rxdsp_channel_nr_anf_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_channel_nr_anf_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_channel_nr_anf_test COMMAND hl2_rxdsp_channel_nr_anf_test)
+
+# The HL2 receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR or ANF, and stays so across a mode change and a rebuild.
+add_executable(hl2_rxdsp_panel_mono_test tests/hl2_rxdsp_panel_mono_test.cpp)
+target_include_directories(hl2_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_panel_mono_test COMMAND hl2_rxdsp_panel_mono_test)
+
+# The ANAN receive panel is mono (L == R) in every mode, including AM/SAM under
+# ANR, and stays so across a mode change and a rebuild (#7563). Offline.
+add_executable(anan_rxdsp_panel_mono_test tests/anan_rxdsp_panel_mono_test.cpp)
+target_include_directories(anan_rxdsp_panel_mono_test PRIVATE src)
+target_link_libraries(anan_rxdsp_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_rxdsp_panel_mono_test COMMAND anan_rxdsp_panel_mono_test)
 
 add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
@@ -2190,10 +2248,18 @@ target_include_directories(rtl_ssb_cw_pipeline_test PRIVATE src)
 target_link_libraries(rtl_ssb_cw_pipeline_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_ssb_cw_pipeline_test COMMAND rtl_ssb_cw_pipeline_test)
 set_tests_properties(rtl_ssb_cw_pipeline_test PROPERTIES TIMEOUT 180)
+
+# Every RTL WDSP recipe is mono at the output panel (L == R): SSB, CW and
+# AM/SAM under ANR or ANF, through the production pipeline (#7563). Offline.
+add_executable(rtl_rx_panel_mono_test tests/rtl_rx_panel_mono_test.cpp)
+target_include_directories(rtl_rx_panel_mono_test PRIVATE src)
+target_link_libraries(rtl_rx_panel_mono_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_rx_panel_mono_test COMMAND rtl_rx_panel_mono_test)
+set_tests_properties(rtl_rx_panel_mono_test PROPERTIES TIMEOUT 180)
 if(WIN32)
     # Paced IQ and bounded channel-stop waits use the coarser Windows timer tick.
     set_tests_properties(rtl_am_sam_pipeline_test rtl_ssb_cw_pipeline_test
-        PROPERTIES TIMEOUT 600)
+        rtl_rx_panel_mono_test PROPERTIES TIMEOUT 600)
 endif()
 
 add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
@@ -2502,6 +2568,17 @@ add_executable(slice_model_squelch_memory_test
 target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
+# #6552 option C: the squelch gate reporter's rate limit and SliceModel taking
+# SliceDelta::squelchGate. Socket-free; the WDSP readback is in wdsp_channel_test.
+add_executable(squelch_gate_test
+    tests/squelch_gate_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(squelch_gate_test PRIVATE src)
+target_link_libraries(squelch_gate_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME squelch_gate_test COMMAND squelch_gate_test)
 
 # Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
 # object (the has*/value distinction, the version gate, clamping), the
@@ -4505,6 +4582,15 @@ target_link_libraries(firmware_currency_test PRIVATE aethercore Qt6::Core Qt6::N
 set_target_properties(firmware_currency_test PROPERTIES AUTOMOC ON)
 add_test(NAME firmware_currency_test COMMAND firmware_currency_test)
 
+# #7421 — locating FlexRadio's per-release MD5 hash file: software index ->
+# media attachments -> hash file, against saved responses. No network.
+add_executable(firmware_md5_url_test
+    tests/firmware_md5_url_test.cpp
+)
+target_include_directories(firmware_md5_url_test PRIVATE src)
+target_link_libraries(firmware_md5_url_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_md5_url_test COMMAND firmware_md5_url_test)
+
 # #5572 — socket-free firmware upload lifecycle. The injected writer exercises
 # production queue accounting and terminal handlers without a radio peer.
 add_executable(firmware_uploader_test
@@ -4962,6 +5048,37 @@ target_link_libraries(hl2_codec_suggestion_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME hl2_codec_suggestion_dialog_test COMMAND hl2_codec_suggestion_dialog_test)
 set_tests_properties(hl2_codec_suggestion_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# HL2 Hardware page: the IO board status is read on demand and shown read-only (#6702).
+# Injected hl2 extension backend; no socket and no radio.
+add_executable(hl2_ioboard_status_dialog_test
+    tests/hl2_ioboard_status_dialog_test.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/RadioSetupDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
+    src/gui/Kpa500AdvancedWidget.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    $<TARGET_OBJECTS:aether_test_resources>
+)
+target_include_directories(hl2_ioboard_status_dialog_test PRIVATE src tests)
+target_link_libraries(hl2_ioboard_status_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_ioboard_status_dialog_test COMMAND hl2_ioboard_status_dialog_test)
+set_tests_properties(hl2_ioboard_status_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Recorded status and injected command/reply sinks; no synthetic radio or sockets.
@@ -5447,6 +5564,25 @@ add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
 set_tests_properties(serial_port_combo_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Serial PTT/CW open-failure classification and advice (#6972): pure logic
+# with an injected device probe, so the permission case runs under root CI.
+add_executable(serial_open_error_test
+    tests/serial_open_error_test.cpp
+    src/core/SerialOpenError.cpp
+)
+target_include_directories(serial_open_error_test PRIVATE src)
+target_link_libraries(serial_open_error_test PRIVATE Qt6::Core)
+add_test(NAME serial_open_error_test COMMAND serial_open_error_test)
+
+# Serial PTT/CW controller state and session intent (#6972). A missing path
+# in a private temporary directory exercises the failure without opening a port.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_open_state_test tests/serial_open_state_test.cpp)
+    target_include_directories(serial_open_state_test PRIVATE src tests)
+    target_link_libraries(serial_open_state_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_open_state_test COMMAND serial_open_state_test)
+endif()
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )
@@ -5572,6 +5708,23 @@ add_executable(view_lock_settings_test tests/view_lock_settings_test.cpp)
 target_include_directories(view_lock_settings_test PRIVATE src)
 target_link_libraries(view_lock_settings_test PRIVATE Qt6::Core)
 add_test(NAME view_lock_settings_test COMMAND view_lock_settings_test)
+
+# A smaller pan layout counts only the closes the model accepted, stops at the
+# first refusal, and reflows, saves and reports the layout for the pans that
+# exist (#7585). Pure policy header plus a source pin on MainWindow; no radio.
+add_executable(pan_layout_shrink_policy_test tests/pan_layout_shrink_policy_test.cpp)
+target_include_directories(pan_layout_shrink_policy_test PRIVATE src)
+target_link_libraries(pan_layout_shrink_policy_test PRIVATE Qt6::Core)
+target_compile_definitions(pan_layout_shrink_policy_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME pan_layout_shrink_policy_test COMMAND pan_layout_shrink_policy_test)
+
+# An operator pan close forgets the pan's Center Lock and its saved intent only
+# once the model accepts the close (#7584). Pure helper header; no radio.
+add_executable(pan_close_center_lock_test tests/pan_close_center_lock_test.cpp)
+target_include_directories(pan_close_center_lock_test PRIVATE src)
+target_link_libraries(pan_close_center_lock_test PRIVATE Qt6::Core)
+add_test(NAME pan_close_center_lock_test COMMAND pan_close_center_lock_test)
 
 add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
 target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
@@ -6029,6 +6182,44 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+# HF Gateway host interface (RFC #7296): pure framing, parsing and
+# formatting. No sockets, no settings.
+add_executable(modem_host_protocol_test
+    tests/modem_host_protocol_test.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_protocol_test PRIVATE src)
+target_link_libraries(modem_host_protocol_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_protocol_test COMMAND modem_host_protocol_test)
+
+# HF Gateway client logic (RFC #7296): positional reply matching and the
+# transmit permission, with no sockets.
+add_executable(modem_host_session_test
+    tests/modem_host_session_test.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_session_test PRIVATE src)
+target_link_libraries(modem_host_session_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_session_test COMMAND modem_host_session_test)
+
+# HF Gateway configuration (RFC #7296): the pure JSON round trip and the
+# validation of stored documents. No AppSettings.
+add_executable(hf_gateway_config_test
+    tests/hf_gateway_config_test.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+)
+target_include_directories(hf_gateway_config_test PRIVATE src)
+target_link_libraries(hf_gateway_config_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hf_gateway_config_test COMMAND hf_gateway_config_test)
+
+# HF Gateway Stage 1 engine (RFC #7296): the receive-only guarantees, with
+# no socket opened.
+add_executable(hf_gateway_engine_test tests/hf_gateway_engine_test.cpp)
+target_include_directories(hf_gateway_engine_test PRIVATE src)
+target_link_libraries(hf_gateway_engine_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hf_gateway_engine_test COMMAND hf_gateway_engine_test)
+
 add_executable(lp100a_protocol_test
     tests/lp100a_protocol_test.cpp
     src/core/LpMeterProtocol.cpp
@@ -6242,6 +6433,19 @@ add_executable(kpa1500_protocol_test
 target_include_directories(kpa1500_protocol_test PRIVATE src)
 target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
+
+# Socket-free state injection; production socket members remain unopened.
+add_executable(kpa1500_tracking_state_test
+    tests/kpa1500_tracking_state_test.cpp
+    src/core/Kpa1500Connection.cpp
+    src/core/Kpa1500Protocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(kpa1500_tracking_state_test PRIVATE src tests)
+target_link_libraries(kpa1500_tracking_state_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME kpa1500_tracking_state_test COMMAND kpa1500_tracking_state_test)
 
 add_executable(spe_legacy_protocol_test
     tests/spe_legacy_protocol_test.cpp
@@ -6817,7 +7021,8 @@ target_link_libraries(peripheral_auth_dialog_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 set_target_properties(peripheral_auth_dialog_test PROPERTIES AUTOMOC ON)
 foreach(_case IN ITEMS automatic removal auth-read manual-recovery external-ag
-        discovery availability discovered-recovery interaction)
+        discovery availability discovered-recovery interaction ag-antenna-status
+        ag-antenna-selection-mode ss-antenna-refusal)
     add_test(NAME peripheral_auth_dialog_${_case}_test
         COMMAND peripheral_auth_dialog_test --case=${_case})
     set_tests_properties(peripheral_auth_dialog_${_case}_test PROPERTIES
@@ -7055,6 +7260,17 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
+    # Tailnet shim discovery helper: relay framing over a socket pair, and a
+    # loopback broadcast. No shim or radio. Sockets, all on ephemeral ports
+    # and none reaching beyond this machine: a UDP 127.0.0.1 listener; TCP
+    # 127.0.0.1 listeners, one in a subprocess standing in for the shim's
+    # feed (a hello and its answer, no radio protocol); on Windows only, two
+    # UDP 0.0.0.0 listeners sharing one port (SO_REUSEADDR) for a
+    # 127.255.255.255 broadcast. A failed bind raises at once and each read
+    # has a timeout (2 s; 10 s for the subprocess), so it fails fast.
+    add_test(NAME tailnet_discovery_helper
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/test_discovery_helper.py)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
@@ -7374,6 +7590,20 @@ target_include_directories(control_action_registry_test PRIVATE src)
 target_link_libraries(control_action_registry_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
 add_test(NAME control_action_registry_test COMMAND control_action_registry_test)
 
+# A control names its bound key in its tooltip, read from the registry (#5484).
+# Socket-free: no radio, no transmitter; settings in a temporary profile.
+add_executable(shortcut_tooltip_test
+    tests/shortcut_tooltip_test.cpp
+    src/gui/ShortcutTooltips.cpp
+    src/gui/ControlActionRegistry.cpp
+    src/core/ShortcutManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(shortcut_tooltip_test PRIVATE src tests)
+target_link_libraries(shortcut_tooltip_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME shortcut_tooltip_test COMMAND shortcut_tooltip_test)
+set_tests_properties(shortcut_tooltip_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
@@ -7411,6 +7641,126 @@ add_executable(green_heron_protocol_test
 target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
+# microHAM TRIO antenna switch, which AetherSDR never switches. Pure: recorded state documents in,
+# snapshots and session decisions out, no socket and no clock.
+add_executable(microham_trio_protocol_test
+    tests/microham_trio_protocol_test.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_protocol_test PRIVATE src)
+target_link_libraries(microham_trio_protocol_test PRIVATE Qt6::Core)
+add_test(NAME microham_trio_protocol_test COMMAND microham_trio_protocol_test)
+
+# The held session over an injected transport and clock: handshake bytes,
+# framing, keep-alive, an eviction that is never retaken, release, close.
+add_executable(microham_trio_session_test
+    tests/microham_trio_session_test.cpp
+    src/core/MicrohamTrioSession.cpp
+    src/core/MicrohamTrioWebSocket.cpp
+    src/core/MicrohamTrioProtocol.cpp
+)
+target_include_directories(microham_trio_session_test PRIVATE src)
+target_link_libraries(microham_trio_session_test PRIVATE Qt6::Core)
+set_target_properties(microham_trio_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_session_test COMMAND microham_trio_session_test)
+
+# The TRIO model on a scripted transport and a hand-moved clock: settings,
+# session words, eviction, release, failures, a cancelled Test; nothing but
+# the handshake, keep-alives and a close leaves. Binds no socket; the
+# settings store is a private temporary profile.
+add_executable(microham_trio_model_test tests/microham_trio_model_test.cpp)
+target_include_directories(microham_trio_model_test PRIVATE src tests)
+target_link_libraries(microham_trio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_model_test COMMAND microham_trio_model_test)
+
+# The Trio row on the Peripherals page with a scripted Trio: Add, Connect,
+# DIRECT / OFFLINE / Needs attention, the state field, Web UI, Remove.
+add_executable(microham_trio_peripherals_test
+    tests/microham_trio_peripherals_test.cpp
+    tests/fakes/PeripheralAuthStoreFake.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/RadioSetupDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    $<TARGET_OBJECTS:aether_test_canon_message_box>
+    $<TARGET_OBJECTS:aether_test_modem_chrome>
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/AntennaGeniusApplet.cpp
+    src/gui/ShackSwitchApplet.cpp
+    $<TARGET_OBJECTS:aether_test_persistent_dialog>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+    $<TARGET_OBJECTS:aether_test_slice_color_manager>
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h)
+target_include_directories(microham_trio_peripherals_test PRIVATE tests/fakes src tests)
+target_link_libraries(microham_trio_peripherals_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+set_target_properties(microham_trio_peripherals_test PROPERTIES AUTOMOC ON)
+add_test(NAME microham_trio_peripherals_test COMMAND microham_trio_peripherals_test)
+set_tests_properties(microham_trio_peripherals_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# The Trio's ports as a station device of a socket-free radio: RadioModel's
+# registry, the view the antenna menus get, the commands a pick sends, every
+# refusal, above all while keyed or in the backend's transmit tail.
+add_executable(microham_trio_link_test tests/microham_trio_link_test.cpp)
+target_include_directories(microham_trio_link_test PRIVATE src tests)
+target_link_libraries(microham_trio_link_test PRIVATE aethercore Qt6::Core)
+add_test(NAME microham_trio_link_test COMMAND microham_trio_link_test)
+
+# Station antenna switches in the RX ANT / TX ANT menus and fields: one
+# submenu per device (src/gui/StationAntennaMenu.h), the shared refusal
+# sentences. Hand-made views on a real RadioModel.
+add_executable(station_antenna_menu_test tests/station_antenna_menu_test.cpp)
+target_include_directories(station_antenna_menu_test PRIVATE src src/gui tests)
+target_link_libraries(station_antenna_menu_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME station_antenna_menu_test COMMAND station_antenna_menu_test)
+set_tests_properties(station_antenna_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The panadapter's RX ANT combo with a station switch: a refresh skipped under
+# the open list is replayed when it closes, and a station pick does not rebuild
+# the combo inside its own index signal. Widget only, offscreen, no socket.
+add_executable(spectrum_overlay_station_antenna_test
+    tests/spectrum_overlay_station_antenna_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_station_antenna_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_station_antenna_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_station_antenna_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_station_antenna_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_station_antenna_test
+         COMMAND spectrum_overlay_station_antenna_test)
+set_tests_properties(spectrum_overlay_station_antenna_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # aethersdr/radio/state payload shape + the drive-publish timing contract
 # (#5518). Links the real TransmitModel because the have-status latch and the
@@ -7799,6 +8149,15 @@ target_link_libraries(cw_text_capability_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME cw_text_capability_test COMMAND cw_text_capability_test)
 
+# #7146 part 2: the host CW text engine in RadioModel behind CwxModel: timing,
+# per-element gates, the queue between senders, scoped and clear-all stops,
+# paddle takeover. Injected backend, no socket, nothing keyed.
+add_executable(host_cw_text_engine_test tests/host_cw_text_engine_test.cpp)
+target_include_directories(host_cw_text_engine_test PRIVATE src tests)
+target_link_libraries(host_cw_text_engine_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME host_cw_text_engine_test COMMAND host_cw_text_engine_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
@@ -7997,6 +8356,15 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+# TCI hw_sensors_enable / hw_sensors (TCI 2.1 §HW_SENSORS): a TciClient text
+# sink attached to the production onTextMessage(). Socket-free: nothing is
+# bound, opened or keyed.
+if(Qt6WebSockets_FOUND)
+    add_executable(tci_hw_sensors_test tests/tci_hw_sensors_test.cpp)
+    target_include_directories(tci_hw_sensors_test PRIVATE src tests)
+    target_link_libraries(tci_hw_sensors_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_hw_sensors_test COMMAND tci_hw_sensors_test)
+endif()
 # An HL2 pan centre outside receivePanCenterControl stops at the edge, in the
 # backend and in the pan model. A real, unconnected Hl2Backend behind
 # RadioModel. Socket-free.
@@ -8173,9 +8541,20 @@ target_include_directories(flex_lan_bind_address_test PRIVATE src)
 target_link_libraries(flex_lan_bind_address_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME flex_lan_bind_address_test COMMAND flex_lan_bind_address_test)
 
-# aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
-# + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
-# and their deep deps, so link the engine library rather than list sources.
+# Socket-free production LAN lifecycle, cancellation and Demo integration.
+add_executable(flex_lan_session_test tests/flex_lan_session_test.cpp)
+add_executable(flex_command_session_test tests/flex_command_session_test.cpp)
+target_include_directories(flex_command_session_test PRIVATE src)
+target_link_libraries(flex_command_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_command_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_command_session_test COMMAND flex_command_session_test)
+set_tests_properties(flex_command_session_test PROPERTIES TIMEOUT 30)
+target_include_directories(flex_lan_session_test PRIVATE src tests)
+target_link_libraries(flex_lan_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_lan_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_lan_session_test COMMAND flex_lan_session_test)
+set_tests_properties(flex_lan_session_test PROPERTIES TIMEOUT 45)
+
 # Session boundary parser regression: in-memory QTcpSocket subclass only;
 # no descriptor, listener, network peer, or radio is opened.
 add_executable(radio_connection_session_test tests/radio_connection_session_test.cpp)
@@ -8301,6 +8680,36 @@ if(Qt6WebSockets_FOUND)
     add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
     set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+    # Socket-owning test: the remote-engine backend (family "aetherd",
+    # aetherd-remote-backend.md) against an in-process aetherd on 127.0.0.1 and
+    # an EPHEMERAL port, with a fake receive target and in-process clients only:
+    # the silent connect (also through a real RadioModel), disconnect sending
+    # nothing, intents paced 1/ms for 3 s inside the client bucket, a conflict
+    # retried, slice add/remove and resync, the certificate pin. Skips (77)
+    # without the openssl tool or when it cannot bind.
+    add_executable(aetherd_remote_engine_loopback_test tests/aetherd_remote_engine_loopback_test.cpp)
+    target_include_directories(aetherd_remote_engine_loopback_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_engine_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets Qt6::Test)
+    add_test(NAME aetherd_remote_engine_loopback_test COMMAND aetherd_remote_engine_loopback_test)
+    set_tests_properties(aetherd_remote_engine_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+    add_executable(aetherd_remote_pairing_policy_test tests/aetherd_remote_pairing_policy_test.cpp)
+    target_include_directories(aetherd_remote_pairing_policy_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_policy_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_policy_test COMMAND aetherd_remote_pairing_policy_test)
+
+    # Socket-owning test: desktop pairing with our own in-process engine.
+    # A QLocalServer uses a unique name, and a QWebSocketServer binds a TCP
+    # ephemeral port on 127.0.0.1. Skips (77) without openssl or on bind failure.
+    add_executable(aetherd_remote_pairing_client_test tests/aetherd_remote_pairing_client_test.cpp)
+    target_include_directories(aetherd_remote_pairing_client_test PRIVATE src tests)
+    target_link_libraries(aetherd_remote_pairing_client_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME aetherd_remote_pairing_client_test COMMAND aetherd_remote_pairing_client_test)
+    set_tests_properties(aetherd_remote_pairing_client_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
     # via TciServer::start(0)) on QHostAddress::Any, with local 127.0.0.1 clients to
@@ -8330,6 +8739,20 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_extension_zero_traffic_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
+
+    # The extension set's HL2 hardware group (aethersdr_hl2_*).
+    add_executable(tci_ext_hl2_hw_test tests/tci_ext_hl2_hw_test.cpp)
+    target_include_directories(tci_ext_hl2_hw_test PRIVATE src tests)
+    target_link_libraries(tci_ext_hl2_hw_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_hl2_hw_test COMMAND tci_ext_hl2_hw_test)
+
+    # The extension set's TX passband group (aethersdr_tx_filter_band).
+    add_executable(tci_ext_tx_passband_test tests/tci_ext_tx_passband_test.cpp)
+    target_include_directories(tci_ext_tx_passband_test PRIVATE src tests)
+    target_link_libraries(tci_ext_tx_passband_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_tx_passband_test COMMAND tci_ext_tx_passband_test)
 
     # The extension set's receive gain and overload groups.
     add_executable(tci_ext_rx_gain_test tests/tci_ext_rx_gain_test.cpp)
@@ -8383,6 +8806,21 @@ if(AETHER_HL2_TX_TXA)
     target_include_directories(hl2_tx_latency_test PRIVATE src)
     target_link_libraries(hl2_tx_latency_test PRIVATE aethercore Qt6::Core)
     add_test(NAME hl2_tx_latency_test COMMAND hl2_tx_latency_test)
+
+    # While keyed, a TX mode, TX filter or TX-slice change is refused (a
+    # mid-over bandpass swap splatters); unkeyed it applies at once. Real
+    # backend, socket-free, nothing on air. 77 = starved by machine load.
+    add_executable(hl2_tx_keyed_mode_change_test tests/hl2_tx_keyed_mode_change_test.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_test PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_tx_keyed_mode_change_test COMMAND hl2_tx_keyed_mode_change_test)
+    set_tests_properties(hl2_tx_keyed_mode_change_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # not registered: manual measurement tool. A mode or passband change on a
+    # running TXA channel, call by call. Real-time paced, minutes long.
+    add_executable(hl2_tx_keyed_mode_change_measure EXCLUDE_FROM_ALL tests/hl2_tx_keyed_mode_change_measure.cpp)
+    target_include_directories(hl2_tx_keyed_mode_change_measure PRIVATE src tests)
+    target_link_libraries(hl2_tx_keyed_mode_change_measure PRIVATE aethercore Qt6::Core)
 endif()
 
 # radiocert's measurement primitives. Header-only by design so this needs no
@@ -8465,6 +8903,31 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# #5065: scheduled CW edges land at their EP2 sample plus a fixed lead; a late
+# down shifts the over, past the bound it is refused; cap and flushes. Socket-free.
+add_executable(hl2_cw_edge_timing_test tests/hl2_cw_edge_timing_test.cpp)
+target_include_directories(hl2_cw_edge_timing_test PRIVATE src tests)
+target_link_libraries(hl2_cw_edge_timing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_edge_timing_test COMMAND hl2_cw_edge_timing_test)
+
+# #5065, the issue's case: a real IambicKeyer, its edges hopping through a
+# blocked main thread to Hl2Backend, frames built at the wall-clock EP2 rate.
+# Socket-free, nothing keyed. Skipped (77) when the host cannot meet the
+# measured wall-clock precondition; never passed in that case.
+add_executable(hl2_cw_gui_stall_test tests/hl2_cw_gui_stall_test.cpp)
+target_include_directories(hl2_cw_gui_stall_test PRIVATE src tests)
+target_link_libraries(hl2_cw_gui_stall_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_gui_stall_test COMMAND hl2_cw_gui_stall_test)
+set_tests_properties(hl2_cw_gui_stall_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
+# #7245: scheduled CW elements through RadioModel with real per-element
+# completions: an element outlives its key-up until its release is on EP2,
+# a paddle release leaves a straight-key hold keyed, revocation at the writer.
+add_executable(hl2_cw_element_completion_test tests/hl2_cw_element_completion_test.cpp)
+target_include_directories(hl2_cw_element_completion_test PRIVATE src tests)
+target_link_libraries(hl2_cw_element_completion_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cw_element_completion_test COMMAND hl2_cw_element_completion_test)
+
 # #5386, #6105: RIT shifts its own receiver's receive path, XIT the TX NCO
 # register while its receiver transmits, each without touching the other.
 # Constructed backend only — no socket, no DSP, nothing keyed.
@@ -8479,6 +8942,14 @@ add_executable(hl2_tx_route_test tests/hl2_tx_route_test.cpp)
 target_include_directories(hl2_tx_route_test PRIVATE src tests)
 target_link_libraries(hl2_tx_route_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_route_test COMMAND hl2_tx_route_test)
+
+# HL2 receive gain while transmitting (0x0e, HERMES.md §13 row 22): the wire
+# bank, a model of ad9866.v's FAST_LNA gain choice, and a constructed backend.
+# No socket, nothing keyed on any radio.
+add_executable(hl2_rx_gain_during_tx_test tests/hl2_rx_gain_during_tx_test.cpp)
+target_include_directories(hl2_rx_gain_during_tx_test PRIVATE src tests)
+target_link_libraries(hl2_rx_gain_during_tx_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rx_gain_during_tx_test COMMAND hl2_rx_gain_during_tx_test)
 
 # #4954: hamlib set_ant and a band-stack recall leave an independent TX output
 # alone. Production CAT parser and recall, injected backend — no socket, nothing keyed.
@@ -8623,6 +9094,16 @@ add_executable(wideband_converter_view_test tests/wideband_converter_view_test.c
 target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
+
+# Termination signals release the radio for any family (#7163): forked children
+# report over a pipe; the HL2 is armed on a pipe fd, never fired. No sockets.
+if(NOT WIN32)
+    add_executable(fatal_signal_release_test tests/fatal_signal_release_test.cpp)
+    target_include_directories(fatal_signal_release_test PRIVATE src)
+    target_link_libraries(fatal_signal_release_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME fatal_signal_release_test COMMAND fatal_signal_release_test)
+    set_tests_properties(fatal_signal_release_test PROPERTIES TIMEOUT 60)
+endif()
 
 # HL2 emergency stop (#4581): arm/disarm/fire, and a re-arm racing a fire.
 # SOCKETS: three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks for
@@ -8831,6 +9312,14 @@ target_include_directories(backend_family_switch_test PRIVATE src tests)
 target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_family_switch_test COMMAND backend_family_switch_test)
 
+# The remote-engine backend's socket-free pieces (aetherd-remote-backend.md §2):
+# the client bucket and its size, latest-wins per resource and method, the
+# resource -> seam mapping, and the ws:// WireGuard admission check.
+add_executable(aetherd_remote_engine_test tests/aetherd_remote_engine_test.cpp)
+target_include_directories(aetherd_remote_engine_test PRIVATE src)
+target_link_libraries(aetherd_remote_engine_test PRIVATE aethercore Qt6::Core)
+add_test(NAME aetherd_remote_engine_test COMMAND aetherd_remote_engine_test)
+
 add_executable(demo_applet_tooltip_test
     tests/demo_applet_tooltip_test.cpp
     src/gui/DemoApplet.cpp
@@ -9025,6 +9514,17 @@ target_link_libraries(radiocert_unmeasured_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
 set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
+
+# The saved PC mic gain never attenuates a host-modulating radio and comes back
+# on a family that uses it. Socket-free, never keys; radiocert's two gain stages
+# spin for a few seconds.
+add_executable(pc_mic_gain_host_modulation_test tests/pc_mic_gain_host_modulation_test.cpp)
+target_include_directories(pc_mic_gain_host_modulation_test PRIVATE src tests)
+target_compile_definitions(pc_mic_gain_host_modulation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pc_mic_gain_host_modulation_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pc_mic_gain_host_modulation_test COMMAND pc_mic_gain_host_modulation_test)
+set_tests_properties(pc_mic_gain_host_modulation_test PROPERTIES TIMEOUT 90)
 
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
@@ -9480,6 +9980,22 @@ target_include_directories(flex_cw_controls_test PRIVATE src tests)
 target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
 add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
 
+# Host transmit time-out (RFC #7021): the timer, warning and release latch on
+# an injected clock. Pure policy, no Qt event loop, no socket.
+add_executable(tx_timeout_guard_test
+    tests/tx_timeout_guard_test.cpp
+    src/models/TxTimeoutGuard.cpp)
+target_include_directories(tx_timeout_guard_test PRIVATE src)
+target_link_libraries(tx_timeout_guard_test PRIVATE Qt6::Core)
+add_test(NAME tx_timeout_guard_test COMMAND tx_timeout_guard_test)
+
+# The same time-out on RadioModel's arming, stop and admission paths. Socket-
+# free: a bare RadioModel, the keyed edge emitted by hand, the clock injected.
+add_executable(tx_timeout_radio_model_test tests/tx_timeout_radio_model_test.cpp)
+target_include_directories(tx_timeout_radio_model_test PRIVATE src tests)
+target_link_libraries(tx_timeout_radio_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_timeout_radio_model_test COMMAND tx_timeout_radio_model_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
@@ -9846,11 +10362,12 @@ set_tests_properties(startup_autoconnect_lockout_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job and executed unfiltered on every
-# push to main (.github/workflows/full-suite.yml) and again weekly under the
-# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
-# and does not take new entries (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
-# wall clock, milliseconds to run.
+# Built and executed unfiltered on every push to main
+# (.github/workflows/full-suite.yml) and again weekly under the sanitizers,
+# like every other Linux test; CI's Linux PR job builds no tests, and the
+# per-PR gate in ci.yml is frozen and does not take new entries
+# (docs/agents/tests-ci.md, "Gate integrity"). Pure arithmetic and four bare
+# QWindows, no widgets/sockets/wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
     $<TARGET_OBJECTS:aether_test_frameless_resizer>
@@ -10440,6 +10957,19 @@ target_link_libraries(automation_dsp_backend_readback_test PRIVATE
 )
 add_test(NAME automation_dsp_backend_readback_test
          COMMAND automation_dsp_backend_readback_test)
+# Bridge `pan close` names why a close was refused (#7583): the HL2's real
+# capability record, keyed, against an injected backend; the line dispatcher
+# is called directly. No QLocalServer, no radio, and the stub cannot key.
+add_executable(automation_pan_close_reason_test
+    tests/automation_pan_close_reason_test.cpp
+)
+target_include_directories(automation_pan_close_reason_test PRIVATE src tests)
+# aetherdesktop_support is added by the AETHER_AUTOMATION_SERVER_TESTS loop below.
+target_link_libraries(automation_pan_close_reason_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_pan_close_reason_test
+         COMMAND automation_pan_close_reason_test)
 # Ordinary RX lifecycle through production model/backend bindings and an
 # injected command/reply sink. No sockets, firmware peer, DSP or USB access.
 add_executable(backend_slice_lifecycle_test tests/backend_slice_lifecycle_test.cpp)
@@ -10465,8 +10995,9 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
-# A receive-only HL2 (aetherd) builds no transmit chain on connect; the
-# transmit-capable backend still does. Same socket-free harness as above.
+# A receive-only HL2 (aetherd) builds no transmit chain on connect and declares
+# txPowerMaxWatts 0; the transmit-capable backend builds it and declares 5 W.
+# Same socket-free harness as above.
 add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
@@ -10649,6 +11180,29 @@ add_executable(hl2_auto_gain_policy_test
 )
 target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
 add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
+# The same law fed two recorded on-air legs (tests/Hl2AutoGainReplayD168.h).
+# MetisProtocol.cpp for Ep4Stats::peakDbfs(); no Qt, no socket.
+add_executable(hl2_auto_gain_replay_test
+    tests/hl2_auto_gain_replay_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_test COMMAND hl2_auto_gain_replay_test)
+# The +48 dB legs of a second evening (tests/Hl2AutoGainReplayD245.h).
+add_executable(hl2_auto_gain_replay_d245_test
+    tests/hl2_auto_gain_replay_d245_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_auto_gain_replay_d245_test PRIVATE src tests)
+add_test(NAME hl2_auto_gain_replay_d245_test COMMAND hl2_auto_gain_replay_d245_test)
+# Both replay headers still come out of their recorded inputs
+# (tests/fixtures/hl2-autogain-replay/), byte for byte.
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME hl2_auto_gain_replay_d168_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d168.py --check)
+    add_test(NAME hl2_auto_gain_replay_d245_header_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_hl2_autogain_replay_d245.py --check)
+endif()
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -11102,6 +11656,8 @@ target_include_directories(auto_agc_threshold_gui_test PRIVATE src tests)
 target_link_libraries(auto_agc_threshold_gui_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test
 )
+target_compile_definitions(auto_agc_threshold_gui_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME auto_agc_threshold_gui_test
          COMMAND auto_agc_threshold_gui_test)
 set_tests_properties(auto_agc_threshold_gui_test PROPERTIES
@@ -11328,6 +11884,15 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
     src/gui/StripTubePanel.cpp
+    src/gui/StripCompPanel.cpp
+    src/gui/ClientCompEditorCanvas.cpp
+    src/gui/ClientCompLimiterButton.cpp
+    src/gui/ClientCompMeter.cpp
+    src/gui/ClientCompThresholdFader.cpp
+    src/gui/ClientPuduApplet.cpp
+    src/gui/ClientPuduEditor.cpp
+    src/gui/StripPuduPanel.cpp
+    src/gui/PooDooLogo.cpp
     src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
@@ -11335,6 +11900,8 @@ target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
 target_link_libraries(client_dsp_knob_dispatch_test PRIVATE
     aethercore Qt6::Widgets Qt6::Test)
 add_test(NAME client_dsp_knob_dispatch_test COMMAND client_dsp_knob_dispatch_test)
+set_tests_properties(client_dsp_knob_dispatch_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(nrs_level_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -11583,6 +12150,32 @@ add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# RF/Tune power are drive, not keying (#5851): every bridge surface sets them
+# without TX permission, and the power ceiling bounds them. Real TxApplet and
+# TxBandDialog, offscreen, no radio.
+add_executable(automation_tx_setpoint_gate_test
+    tests/automation_tx_setpoint_gate_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/TxBandDialog.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    $<TARGET_OBJECTS:aether_test_canon_window>
+    $<TARGET_OBJECTS:aether_test_drag_value_popup>
+    $<TARGET_OBJECTS:aether_test_frameless_resizer>
+    $<TARGET_OBJECTS:aether_test_frameless_title_bar>
+)
+target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
+# The source root lets it read the MainWindow key-injection wiring it cannot construct.
+target_compile_definitions(automation_tx_setpoint_gate_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(automation_tx_setpoint_gate_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_tx_setpoint_gate_test COMMAND automation_tx_setpoint_gate_test)
+set_tests_properties(automation_tx_setpoint_gate_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CW speed entry survives repeated capability limits between keystrokes.
 # Real applet/model, offscreen; no radio or sockets.
 add_executable(phone_cw_speed_entry_test
@@ -11827,6 +12420,9 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    automation_pan_close_reason_test
+    flex_command_session_test
+    flex_lan_session_test
     flex_receive_path_test
     flex_setup_observation_test
     session_control_test
@@ -11862,6 +12458,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_hw_sensors_test
     hl2_pan_center_range_test
     tci_agc_gain_test
     radio_model_client_state_test
@@ -11878,6 +12475,8 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_extension_set_test
     tci_extension_zero_traffic_test
+    tci_ext_hl2_hw_test
+    tci_ext_tx_passband_test
     tci_ext_rx_gain_test
     tci_ext_antennas_test
     tci_ext_span_test
@@ -11912,6 +12511,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_recording_mode_dim_test
     radio_setup_headphone_output_gate_test
     hl2_codec_suggestion_dialog_test
+    hl2_ioboard_status_dialog_test
     radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
@@ -11984,16 +12584,21 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_rx_only_tx_chain_test
     hl2_automation_no_tx_gate_test
     serial_cw_key_baseline_test
+    serial_open_state_test
     hl2_receive_only_mode_key_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
     hl2_rit_xit_test
     hl2_tx_route_test
+    hl2_rx_gain_during_tx_test
     independent_tx_antenna_test
     slice_rit_xit_seam_test
     hl2_rx_antenna_test
     hl2_tx_gate_test
+    hl2_cw_edge_timing_test
+    hl2_cw_gui_stall_test
+    hl2_cw_element_completion_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
     hl2_rx_dsp_declaration_test
@@ -12008,6 +12613,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_display_observation_test
     control_slice_frequency_test
     control_receive_test
+    app_control_host_test
     control_telemetry_test
     control_front_end_overload_test
     aetherd_discovery_startup_test
@@ -12065,6 +12671,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qrz_callsign_test
     shortcut_manager_test
     control_action_registry_test
+    shortcut_tooltip_test
     window_shortcut_test
     antenna_alias_test
     mqtt_settings_test
@@ -12118,6 +12725,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     bandplan_usage_resource_test
     vkamp_connection_test
+    kpa1500_tracking_state_test
     rfkit_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
@@ -12169,10 +12777,12 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_connect_family_test
     automation_tx_watchdog_test
     phone_applet_vox_disarm_test
+    automation_tx_setpoint_gate_test
     automation_rn2_probe_test
     automation_nnr_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
+    automation_pan_close_reason_test
     automation_nb2_capability_test
     backend_slice_lifecycle_test
     tci_automation_test

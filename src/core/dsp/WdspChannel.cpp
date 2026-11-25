@@ -167,7 +167,7 @@ void loadWisdomOnce()
 }
 
 // Write the wisdom cache now, at the end of open() under g_setupMutex. Eager
-// because at-exit hooks don't run on Hl2EmergencyStop's re-raised signal,
+// because at-exit hooks don't run on FatalSignalRelease's re-raised signal,
 // crashes or force-quit. Per-open cost is ~10-50 KB on the I/O thread.
 // Write-then-rename because other processes (other instances, ctest -j8)
 // share the file: fftw_export_wisdom_to_filename truncates first and FFTW
@@ -758,9 +758,14 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
         } else {
             SetTXABandpassFreqs(m_channelId, lowHz, highHz);
         }
+        m_config.filterLowHz = lowHz;
+        m_config.filterHighHz = highHz;
+        // fmsq's threshold follows the filter width; see fmSquelchThresholdFor().
+        if (m_config.direction == Direction::Receive
+            && squelchStageFor(m_config.mode) == SquelchStage::Fm) {
+            applySquelchLocked(m_config.mode);
+        }
     }
-    m_config.filterLowHz = lowHz;
-    m_config.filterHighHz = highHz;
     endControlOperation();
     return true;
 }
@@ -858,6 +863,44 @@ double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
     return std::pow(10.0, -2.0 * clamped / 100.0);
 }
 
+double WdspChannel::fmSquelchNoiseLevelForHalfWidth(double halfWidthHz) noexcept
+{
+    // Quadratic in u = log10(W / 3000 Hz), fitted to the noise-alone 50 % duty
+    // level over 1500..6000 Hz (max residual 1.1 levels). Outside that range
+    // the half-width is held at the nearer end, not extrapolated.
+    const double held = std::isfinite(halfWidthHz)
+        ? std::clamp(halfWidthHz, kFmSquelchFitMinHalfWidthHz, kFmSquelchFitMaxHalfWidthHz)
+        : kFmSquelchFitMaxHalfWidthHz;
+    const double u = std::log10(held / 3000.0);
+    return 22.59 - 98.64 * u + 75.02 * u * u;
+}
+
+double WdspChannel::fmSquelchWidthOffsetLevels(double halfWidthHz) noexcept
+{
+    // Referenced to the fit's widest point, so the offset is never negative and
+    // a filter at or above it (the HL2's FM default, ±8000) keeps the old map.
+    return fmSquelchNoiseLevelForHalfWidth(halfWidthHz)
+           - fmSquelchNoiseLevelForHalfWidth(kFmSquelchFitMaxHalfWidthHz);
+}
+
+double WdspChannel::fmSquelchThresholdFor(int level, double halfWidthHz) noexcept
+{
+    // Not clamped to 100 after the offset: a narrow filter keeps the slider's
+    // whole travel above its noise point.
+    const double effective = std::clamp(static_cast<double>(level), 0.0, 100.0)
+                             + fmSquelchWidthOffsetLevels(halfWidthHz);
+    return std::pow(10.0, -2.0 * effective / 100.0);
+}
+
+std::optional<bool> WdspChannel::fmSquelchGateOpen() const noexcept
+{
+    if (m_config.direction != Direction::Receive
+        || !m_fmSquelchRunning.load(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    return GetRXAFMSQGateOpen(m_channelId) != 0;
+}
+
 double WdspChannel::levelSquelchThresholdDbfsForLevel(int level, double offsetDb) noexcept
 {
     // Fitted to HL2 measurements at the offset-0 gain (#5982, #6092): level 50
@@ -884,7 +927,10 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     const int level = m_config.squelchLevel;
     switch (applied.stage) {
     case SquelchStage::Fm:
-        applied.threshold = fmSquelchThresholdForLevel(level);
+        applied.fmHalfWidthHz = 0.5 * (m_config.filterHighHz - m_config.filterLowHz);
+        applied.fmEffectiveLevel = std::clamp(level, 0, 100)
+                                   + fmSquelchWidthOffsetLevels(applied.fmHalfWidthHz);
+        applied.threshold = fmSquelchThresholdFor(level, applied.fmHalfWidthHz);
         SetRXAFMSQThreshold(m_channelId, applied.threshold);
         applied.fmRun = run;
         break;
@@ -899,6 +945,7 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     }
     SetRXAFMSQRun(m_channelId, applied.fmRun ? 1 : 0);
     SetRXAAMSQRun(m_channelId, applied.amRun ? 1 : 0);
+    m_fmSquelchRunning.store(applied.fmRun, std::memory_order_release);
     const std::scoped_lock recordLock(m_appliedSquelchMutex);
     m_appliedSquelch = applied;
 }
@@ -1085,6 +1132,24 @@ bool WdspChannel::setNoiseReduction(bool enabled, int level) noexcept
     return true;
 }
 
+bool WdspChannel::setAutoNotch(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveAnfSet = true;
+        m_liveAnfEnabled = enabled;
+        m_liveAnfLevel = std::clamp(level, 0, 100);
+        SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+        SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)
@@ -1256,6 +1321,13 @@ double WdspChannel::meter(Meter which) const noexcept
     return GetRXAMeter(m_channelId, static_cast<int>(which));
 }
 
+double WdspChannel::txAlcReductionDbForTest() const noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return std::numeric_limits<double>::quiet_NaN();
+    return GetTXAMeter(m_channelId, AETHER_WDSP_TXA_ALC_GAIN);
+}
+
 std::size_t WdspChannel::outputBlockSize() const noexcept
 {
     return m_outputBlockSize;
@@ -1282,6 +1354,15 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 uint64_t WdspChannel::threadAllocationSequenceForTest() noexcept
 {
     return wdspPortThreadAllocationSequence();
+}
+
+void WdspChannel::setRxPanelBinauralForTest(int channelId, int binaural) noexcept
+{
+    // WDSP indexes rxa[] with the id unchecked; -1 is wdspChannelId() before a
+    // channel opens.
+    if (channelId < 0 || channelId >= kWdspChannelCount)
+        return;
+    SetRXAPanelBinaural(channelId, binaural);
 }
 
 int WdspChannel::openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept
@@ -1577,6 +1658,10 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             return false;
         }
     }
+    if (config.rxPanelMono && config.direction != Direction::Receive) {
+        setError(error, "WDSP rxPanelMono is receive-only");
+        return false;
+    }
     const std::pair<const std::optional<double>&, const char*> panelGains[] = {
         {config.rxPanelGain, "WDSP rxPanelGain must be finite, non-negative and receive-only"},
         {config.fmRxPanelGain, "WDSP fmRxPanelGain must be finite, non-negative and receive-only"},
@@ -1756,6 +1841,9 @@ bool WdspChannel::open() noexcept
         if (m_config.fmRxPanelGain) {
             SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, m_config.mode));
         }
+        if (m_config.rxPanelMono) {
+            SetRXAPanelBinaural(m_channelId, 0);
+        }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);
             SetRXAWBFMDiscriminatorCompensation(m_channelId, 1);
@@ -1832,10 +1920,16 @@ bool WdspChannel::open() noexcept
             }
             RXANBPSetNotchesRun(m_channelId,
                 receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
-        } else if (m_liveNrSet) {
-            // close() frees the ANR stage; restore a live caller's request.
-            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
-            SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+        } else {
+            // close() frees the ANR and ANF stages; restore a live caller's requests.
+            if (m_liveNrSet) {
+                SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+                SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+            }
+            if (m_liveAnfSet) {
+                SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(m_liveAnfLevel), 0.1);
+                SetRXAANFRun(m_channelId, m_liveAnfEnabled ? 1 : 0);
+            }
         }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));

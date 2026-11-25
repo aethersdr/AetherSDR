@@ -3,6 +3,7 @@
 #include <QLatin1String>
 #include <QString>
 #include <QStringList>
+#include <QStringView>
 
 namespace AetherSDR {
 
@@ -10,17 +11,28 @@ namespace AetherSDR {
 // CW. Radio-family-neutral — every backend reports these spellings — so the
 // engine can answer the question without reaching into the UI.
 //
-// Voice modes carry intelligible speech, including wide FM's WFM/WBFM aliases.
+// The one analog-voice mode table. AetherDSP's automatic NR gate
+// (core/AetherDspModePolicy.cpp) and isVoiceMode() below both read it, so a
+// new voice mode is a single edit here. AME is Flex's AM variant, handled
+// with AM/SAM/DSB in FlexLib v4.3.16 (Slice.cs); not firmware-confirmed on a
+// slice. FMN is the RTL-SDR's narrow FM;
+// WFM/WBFM are wide FM's aliases. DFM is FM data and stays out, as do CW,
+// the digital waveforms (DSTR, FreeDV, DRM, ...) and an empty mode.
+inline bool isAnalogVoiceMode(QStringView mode)
+{
+    return mode == u"USB" || mode == u"LSB" || mode == u"DSB"
+        || mode == u"AM"  || mode == u"AME" || mode == u"SAM"
+        || mode == u"FM"  || mode == u"NFM" || mode == u"FMN"
+        || mode == u"WFM" || mode == u"WBFM";
+}
+
+// Voice modes carry intelligible speech: the shared analog-voice table.
 // Copy Assist follows the active slice; the voice keyer follows the TX slice
 // and additionally excludes the backend's receive-only modes below. CW, data
-// modes and an empty mode (no slice) are not voice.
+// modes (DFM included) and an empty mode (no slice) are not voice.
 inline bool isVoiceMode(const QString& mode)
 {
-    return mode == QLatin1String("USB") || mode == QLatin1String("LSB")
-        || mode == QLatin1String("AM")  || mode == QLatin1String("SAM")
-        || mode == QLatin1String("FM")  || mode == QLatin1String("NFM")
-        || mode == QLatin1String("DFM") || mode == QLatin1String("WFM")
-        || mode == QLatin1String("WBFM");
+    return isAnalogVoiceMode(mode);
 }
 
 // The DVK indicator, mode-change abort and playback refusal share this gate.

@@ -21,6 +21,8 @@ While shortcuts are off, keys go to whatever control has focus, so Space, the ar
 
 With shortcuts on, AetherSDR still backs off while you type in a text field, does nothing to the radio while disconnected, and won't tune a locked slice.
 
+A button with a bound shortcut names its key at the end of its tooltip, for example **Toggle manual transmit on or off (T)** on MOX. While shortcuts are off it reads **(T — shortcuts disabled)**. When the radio lacks the control, the key comes first and the reason follows it. Screen readers hear the same text. This covers MOX, TUNE and ATU in TX Controls, VOX in Phone, and PROC, DAX and MON in Phone/CW; a button whose action has no key keeps its usual tooltip, and a key you change in the editor shows at once.
+
 ## Using keyboard shortcuts
 
 ### Changing shortcuts

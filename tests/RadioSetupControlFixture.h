@@ -1,4 +1,5 @@
 #pragma once
+#include "FlexCommandTestSupport.h"
 #include "FlexSetupStatusTestSupport.h"
 
 #include "core/backends/flex/CommandParser.h"
@@ -34,14 +35,9 @@ public:
     { radio.deliverLineForTest(CommandParser::parseLine(raw)); }
     static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
     static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
-    static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)
-    { return radio.setupCommandSink(writer); }
-    static auto productionTransferSink(RadioModel& radio, const RadioModel::TransferCommandWriter& writer)
-    { return radio.transferCommandSink(writer); }
     static void transmitting(RadioModel& radio, bool active) { radio.m_radioTransmitting = active; }
     static void peer(RadioModel& radio, const QHostAddress& address) { radio.m_lastInfo.address = address; }
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
-    static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
     static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }
     static PanadapterModel* addPan(RadioModel& radio, const QString& id)
     {
@@ -71,6 +67,9 @@ class RadioSetupTestBackend final : public FlexBackend {
 public:
     bool live{true};
     bool accept{true};
+    // Setup-sink commands starting with this are refused (as the profile-load
+    // hold refuses slice writes); empty refuses nothing.
+    QString refusePrefix;
     QStringList commands;
     std::vector<RadioSetupCompletion> replies;
     std::shared_ptr<bool> retired;
@@ -92,7 +91,7 @@ public:
     }
     RadioSetupTestBackend()
     {
-        setAdministrationCommandSink([this](const QString& command,
+        setAdministrationCommandSinkForTest([this](const QString& command,
             const RadioControlCompletion& completion, const RadioControlFence& current,
             const std::function<void()>& written) {
             if (!live || !accept || !current || !current()) { return false; }
@@ -102,7 +101,7 @@ public:
             return true;
         });
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
-        setServiceCommandSink([this](const QString& command, const RadioControlFence& current, CommandReply completion) {
+        setServiceCommandSinkForTest([this](const QString& command, const RadioControlFence& current, CommandReply completion) {
             if (!live || !accept || (current && !current())) { return false; }
             commands.append(command);
             if (completion) {
@@ -110,8 +109,9 @@ public:
             }
             return true;
         });
-        setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
+        setSetupCommandSinkForTest([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }
+            if (!refusePrefix.isEmpty() && command.startsWith(refusePrefix)) { return false; }
             commands.append(command);
             if (completion) { replies.push_back(completion); }
             return true;

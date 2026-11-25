@@ -325,7 +325,7 @@ void MainWindow::updateAetherDspModePolicy()
     if (action.kind == AetherDspModePolicy::ActionKind::Disable) {
         qCInfo(lcAudio).noquote()
             << "AetherDSP: disabling" << action.method
-            << "because an audible slice uses CW or a digital mode";
+            << "because an audible slice uses a mode outside the compatible NR list";
         setAetherDspMethodEnabled(action.method, false);
     } else if (action.kind == AetherDspModePolicy::ActionKind::Enable) {
         qCInfo(lcAudio).noquote()
@@ -824,6 +824,18 @@ void MainWindow::wireDspApplets()
             this, &MainWindow::onTxChainStageEnabledChanged);
 
     // ── RX chain edit + bypass ──────────────────────────────────────────────
+    // The chain exists here, after buildUI(); menu construction precedes it.
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxDspEditRequested,
+            this, [this]() { ensureAetherRxDialog(); });
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxDspMethodUserToggled,
+            this, [this]() { m_aetherDspModePolicy.noteUserOverride(); });
+    // NR2 re-enable must prepare wisdom before constructing the filter.
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxNr2EnableWithWisdomRequested,
+            this, &MainWindow::enableNr2WithWisdom);
+
     // Phase 1 routes RX EQ double-clicks to the existing ClientEqEditor in
     // RX path mode.  Click-bypass lands on the engine via the chain widget
     // itself; we just refresh the CEQ applet's Enable toggle here so it

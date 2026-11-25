@@ -161,6 +161,24 @@ void receiverSetpointsRoundTrip()
     backend.setSliceNoiseBlanker(0, NoiseBlankerKind::Advanced, 70, NoiseBlankerFill::MeanHold);
     backend.setSliceApf(0, true, 35);
     backend.setSliceSquelch(0, true, 44);
+    const auto dsp = [&backend](SliceDspRequest::Feature feature, SliceDspRequest::Field field,
+                                bool enabled, int level) {
+        SliceDspRequest request;
+        request.feature = feature;
+        request.field = field;
+        request.enabled = enabled;
+        request.level = level;
+        return backend.requestSliceDsp(0, request);
+    };
+    check(dsp(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Enabled, true, 0)
+              == ReceiveDispatch::Dispatched
+              && dsp(SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Level, false, 65)
+                  == ReceiveDispatch::Dispatched
+              && dsp(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled, true, 0)
+                  == ReceiveDispatch::Dispatched
+              && dsp(SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Level, false, 25)
+                  == ReceiveDispatch::Dispatched,
+          "the NR and ANF requests are applied");
     check(backend.requestSliceControl(0, {SliceControlRequest::Field::Rit,
               IncrementalTuning{true, 120}}) == ReceiveDispatch::Dispatched,
           "the typed RIT pair is applied");
@@ -183,6 +201,10 @@ void receiverSetpointsRoundTrip()
     check(a.value(QStringLiteral("squelchOn")).toBool()
               && a.value(QStringLiteral("squelchLevel")).toInt() == 44,
           "capture carries squelch");
+    check(a.value(QStringLiteral("nrOn")).toBool() && a.value(QStringLiteral("nrLevel")).toInt() == 65
+              && a.value(QStringLiteral("anfOn")).toBool()
+              && a.value(QStringLiteral("anfLevel")).toInt() == 25,
+          "capture carries NR and ANF");
     check(a.value(QStringLiteral("ritOn")).toBool() && a.value(QStringLiteral("ritHz")).toInt() == 120
               && a.value(QStringLiteral("xitOn")).toBool()
               && a.value(QStringLiteral("xitHz")).toInt() == -80,
@@ -195,12 +217,20 @@ void receiverSetpointsRoundTrip()
     QHash<int, SliceDelta> seen;
     int nbEchoes = 0;
     SliceDelta nb;
+    SliceDelta nr;
+    SliceDelta anf;
     QObject::connect(&next, &IRadioBackend::sliceChanged, &next,
                      [&](int id, const SliceDelta& d) {
                          seen[id] = d;
                          if (id == 0 && d.nbKind) {
                              ++nbEchoes;
                              nb = d;
+                         }
+                         if (id == 0 && d.nr) {
+                             nr = d;
+                         }
+                         if (id == 0 && d.anf) {
+                             anf = d;
                          }
                      });
     next.applyRestoredState(captured);
@@ -214,6 +244,9 @@ void receiverSetpointsRoundTrip()
           "receiver A comes back with its blanker, and publishes it");
     check(nbEchoes == 1, "the restored blanker is published once, not on every slice echo");
     check(d.apf && *d.apf && d.apfLevel && *d.apfLevel == 35, "receiver A comes back with APF");
+    check(nr.nr && *nr.nr && nr.nrLevel && *nr.nrLevel == 65 && anf.anf && *anf.anf
+              && anf.anfLevel && *anf.anfLevel == 25,
+          "receiver A comes back with NR and ANF, and publishes them");
     check(d.squelchOn && *d.squelchOn && d.squelchLevel && *d.squelchLevel == 44,
           "receiver A comes back with squelch");
     check(d.ritOn && *d.ritOn && d.ritFreq && *d.ritFreq == 120 && d.xitOn && *d.xitOn

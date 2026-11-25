@@ -2,6 +2,7 @@
 #include "AudioButtonIcon.h"
 #include <QScopeGuard>
 #include "AntennaChoiceGate.h"
+#include "StationAntennaMenu.h"
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
 #include "AgcGainText.h"
@@ -16,6 +17,7 @@
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
+#include "CenterMarkSlider.h"
 #include "ComboStyle.h"
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
@@ -39,6 +41,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QMenu>
+#include <QToolTip>
 #include <QApplication>
 #include <QToolButton>
 #include <QButtonGroup>
@@ -64,71 +67,6 @@
 #include <limits>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
-
-// Slider that resets to a default value on double-click.
-// Extends GuardedSlider for controls-lock support (#745).
-class ResetSlider : public GuardedSlider {
-public:
-    explicit ResetSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : GuardedSlider(o, parent), m_resetVal(resetVal) {}
-protected:
-    void mouseDoubleClickEvent(QMouseEvent*) override { setValue(m_resetVal); }
-private:
-    int m_resetVal;
-};
-
-// ResetSlider filled from the centre outward with a centre-mark dot, for
-// pan/balance controls whose zero is the midpoint. Overpaints the stylesheet's
-// 0→handle sub-page with groove colour, then fills centre→handle in accent,
-// clipped to exclude the handle disc.
-class CenterMarkSlider : public ResetSlider {
-public:
-    explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
-        : ResetSlider(resetVal, o, parent) {}
-protected:
-    void paintEvent(QPaintEvent* ev) override {
-        ResetSlider::paintEvent(ev);
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        auto& tm = AetherSDR::ThemeManager::instance();
-        const int cx = width() / 2;
-        const int cy = height() / 2;
-        const int grooveY = cy - 2;
-
-        QStyleOptionSlider opt;
-        initStyleOption(&opt);
-        const QRect handleRect = style()->subControlRect(
-            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
-        const int handleCx = handleRect.center().x();
-
-        // Clip out the handle so the overpaint never touches its pixels.
-        QPainterPath clip;
-        clip.addRect(rect());
-        QPainterPath handlePath;
-        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
-        p.setClipPath(clip.subtracted(handlePath));
-
-        p.setPen(Qt::NoPen);
-        if (handleCx < cx) {
-            // Sub-page already painted (0 → handle); erase it with groove
-            // colour, then add accent (handle → centre).
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, handleCx, 4));
-            p.setBrush(tm.color("color.accent"));
-            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
-        } else {
-            // Sub-page already paints (0 → handle); we only want (centre
-            // → handle), so erase (0 → centre) with groove colour.
-            p.setBrush(tm.color("color.background.1"));
-            p.drawRect(QRect(0, grooveY, cx, 4));
-        }
-
-        // Centre-mark dot — visual landmark for the neutral position.
-        p.setBrush(QColor("#608090"));
-        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
-    }
-};
 
 // Button that paints a solid left- or right-pointing triangle.
 class TriBtn : public QPushButton {
@@ -170,14 +108,6 @@ namespace AetherSDR {
 static QString percentText(int value)
 {
     return QStringLiteral("%1%").arg(value);
-}
-
-static QString panText(int value)
-{
-    if (value == 50)
-        return QStringLiteral("C");
-    return QStringLiteral("%1%2").arg(value < 50 ? QStringLiteral("L") : QStringLiteral("R"))
-                                .arg(std::abs(value - 50));
 }
 
 // ── Style constants (matching docs/style/applet-style-guide.md) ───────────────
@@ -399,22 +329,28 @@ void RxApplet::buildUI()
                 return;
             }
             QPointer<SliceModel> slice = m_slice;
+            const QVector<StationAntennaView> stations =
+                m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+            const bool station = !stations.isEmpty();
+            const bool published = !slice->rxAntennaList().isEmpty()
+                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
             // Nothing real to choose -- the radio published no port and no
-            // Kiwi receiver is on offer: refuse visibly instead of opening a
-            // menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
+            // Kiwi receiver or station switch is on offer: refuse visibly
+            // instead of opening a menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
             {
                 const bool connected = m_radioModel && m_radioModel->isConnected();
-                const bool published = !slice->rxAntennaList().isEmpty()
-                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
                 const bool virtualAntennas = m_kiwiSdrManager
                     && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-                if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                if (rxAntennaChoiceRefused(connected, published, virtualAntennas,
+                                           station)) {
                     emit antennaChoiceRefused(false);
                     return;
                 }
             }
             const QString cur = slice->rxAntenna();
-            QStringList menuOptions = rxAntennaOptions();
+            // A station switch with no radio port beside it is the whole list.
+            QStringList menuOptions =
+                published || !station ? rxAntennaOptions() : QStringList{};
             if (m_kiwiSdrManager) {
                 for (const QString& ant : m_kiwiSdrManager->virtualAntennaTokens()) {
                     if (!ant.isEmpty() && !menuOptions.contains(ant)) {
@@ -422,7 +358,7 @@ void RxApplet::buildUI()
                     }
                 }
             }
-            if (menuOptions.isEmpty()) {
+            if (menuOptions.isEmpty() && !station) {
                 menuOptions << QStringLiteral("ANT1") << QStringLiteral("ANT2");
             }
             const QString activeKiwiProfile =
@@ -449,11 +385,25 @@ void RxApplet::buildUI()
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
+            // A Kiwi receiver on this slice is what it hears: no switch port is checked.
+            addStationAntennaMenus(*menu, stations, false, activeKiwiProfile.isEmpty());
             connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
                 if (!sel || !slice) {
                     return;
                 }
                 const QString token = sel->data().toString();
+                if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                    const QString refusal = m_radioModel
+                        ? m_radioModel->selectStationAntenna(pick->id, pick->token, false)
+                        : QString();
+                    // Only a pick that was taken ends the slice's Kiwi receiver.
+                    if (refusal.isEmpty()) {
+                        emit flexRxAntennaSelected(slice->sliceId());
+                    } else {
+                        showStationAntennaRefusal(m_rxAntBtn, refusal);
+                    }
+                    return;
+                }
                 const QString profileId = m_kiwiSdrManager
                     ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                     : QString();
@@ -478,11 +428,15 @@ void RxApplet::buildUI()
             "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
             // TX has no Kiwi escape: a virtual receiver never transmits.
+            const QVector<StationAntennaView> stations =
+                m_radioModel ? m_radioModel->stationAntennaViews() : QVector<StationAntennaView>{};
+            const bool station = !stations.isEmpty();
+            const bool published = m_slice
+                && (!m_slice->txAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty()));
             if (m_slice) {
                 const bool connected = m_radioModel && m_radioModel->isConnected();
-                const bool published = !m_slice->txAntennaList().isEmpty()
-                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
-                if (txAntennaChoiceRefused(connected, published)) {
+                if (txAntennaChoiceRefused(connected, published, station)) {
                     emit antennaChoiceRefused(true);
                     return;
                 }
@@ -494,7 +448,8 @@ void RxApplet::buildUI()
             QMenu& menu = *menuOwner.get();
             menu.setToolTipsVisible(true);  // raw token behind the alias (#5546)
             const QString cur = m_slice ? m_slice->txAntenna() : "";
-            const QStringList options = txAntennaOptions();
+            const QStringList options =
+                published || !station ? txAntennaOptions() : QStringList{};
             for (const QString& ant : options) {
                 QAction* act = menu.addAction(antennaMenuLabel(ant, options));
                 act->setData(ant);
@@ -503,13 +458,24 @@ void RxApplet::buildUI()
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
+            addStationAntennaMenus(menu, stations, true);
             const QAction* sel = menu.exec(
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
             if (!self || !menuOwner || !button || !slice
                 || self->m_slice != slice.data() || !sel) {
                 return;
             }
-            slice->setTxAntenna(sel->data().toString());
+            const QString token = sel->data().toString();
+            if (const auto pick = stationAntennaPickFrom(sel->data())) {
+                const QString refusal = self->m_radioModel
+                    ? self->m_radioModel->selectStationAntenna(pick->id, pick->token, true)
+                    : QString();
+                if (!refusal.isEmpty()) {
+                    showStationAntennaRefusal(button, refusal);
+                }
+                return;
+            }
+            slice->setTxAntenna(token);
         });
         row->addWidget(m_txAntBtn);
 
@@ -1015,7 +981,6 @@ void RxApplet::buildUI()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
-        static_cast<GuardedSlider*>(m_panSlider)->setDragValueFormatter(panText);
         applyPrimarySliderStyle(m_panSlider);
         row->addWidget(m_panSlider, 1);
 
@@ -1052,6 +1017,12 @@ void RxApplet::buildUI()
             return QString::number(v);
         });
         applyPrimarySliderStyle(m_sqlSlider);
+        // A closed squelch gate dims the fill. One sheet with a property rule:
+        // a gate flip re-polishes rather than re-resolving it (#6552).
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_sqlSlider,
+            primarySliderStyleTemplate() + QStringLiteral(
+                "QSlider[squelchGate=\"closed\"]::sub-page:horizontal"
+                " { background: {{color.slider.foreground.gateClosed}}; }"));
         row->addWidget(m_sqlSlider, 1);
 
         applySqlModeVisuals();
@@ -1392,6 +1363,8 @@ void RxApplet::buildUI()
 void RxApplet::applySqlModeVisuals()
 {
     if (!m_sqlBtn) return;
+    // Declared first so it runs last, after every tooltip below is set.
+    const auto paintGate = qScopeGuard([this] { applySqlGateVisuals(); });
     const auto describeThreshold = qScopeGuard([this] {
         if (!m_exclusiveSquelch || usingExternalReceiveSquelch()
             || !m_sqlSlider || !m_sqlSlider->isEnabled()) { return; }
@@ -1484,6 +1457,52 @@ void RxApplet::applySqlModeVisuals()
         m_sqlSlider->update();
     }
     applySqlButtonDescription();
+}
+
+SquelchGateState RxApplet::shownSquelchGate() const
+{
+    if (!m_slice || m_sqlMode == SqlMode::Off || usingExternalReceiveSquelch()
+        || !m_squelchGateModes.contains(m_slice->mode(), Qt::CaseInsensitive)) {
+        return SquelchGateState::Unavailable;
+    }
+    return m_slice->squelchGate();
+}
+
+void RxApplet::applySqlGateVisuals()
+{
+    if (!m_sqlSlider) {
+        return;
+    }
+    const SquelchGateState gate = shownSquelchGate();
+    // Closed takes the dimmed fill (the sheet's squelchGate rule); open and
+    // unreported keep the applet's.
+    const QString gateName = gate == SquelchGateState::Open ? QStringLiteral("open")
+        : gate == SquelchGateState::Closed ? QStringLiteral("closed") : QString();
+    if (m_sqlSlider->property("squelchGate").toString() != gateName) {
+        m_sqlSlider->setProperty("squelchGate", gateName);
+        m_sqlSlider->style()->unpolish(m_sqlSlider);
+        m_sqlSlider->style()->polish(m_sqlSlider);
+        m_sqlSlider->update();
+    }
+    QString line;
+    if (gate == SquelchGateState::Open) {
+        line = tr("Gate open: audio passes.");
+    } else if (gate == SquelchGateState::Closed) {
+        line = tr("Gate closed: audio muted.");
+    }
+    // Only our own line is replaced, so a tooltip set elsewhere (a mode's
+    // unavailability reason) survives a gate change.
+    const auto withLine = [&](QString text, QLatin1Char sep) {
+        const QString old = sep + m_paintedSquelchGateLine;
+        if (!m_paintedSquelchGateLine.isEmpty() && text.endsWith(old)) {
+            text.chop(old.size());
+        }
+        return line.isEmpty() ? text : text + sep + line;
+    };
+    m_sqlSlider->setToolTip(withLine(m_sqlSlider->toolTip(), QLatin1Char('\n')));
+    m_sqlSlider->setAccessibleDescription(
+        withLine(m_sqlSlider->accessibleDescription(), QLatin1Char(' ')));
+    m_paintedSquelchGateLine = line;
 }
 
 void RxApplet::applySqlButtonDescription()
@@ -2169,6 +2188,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         releaseTransmitFrequencyCheck();
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &RxApplet::updateAntennaButtons);
+        disconnect(m_radioModel, &RadioModel::stationAntennasChanged, this, nullptr);
         disconnect(m_radioModel, &RadioModel::slotOccupancyChanged,
                    this, nullptr);
         disconnect(m_radioModel, &RadioModel::capabilitiesChanged,
@@ -2185,6 +2205,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
         ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
+    m_squelchGateModes = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().squelchGateModes : QStringList{};
     if (!m_radioModel) {
         m_filterPassband->setEnabled(true);
         m_filterPassband->setAccessibleDescription(
@@ -2194,16 +2216,14 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
         m_filterAvailability->registerRestriction(m_txAntBtn,
             tr("This radio is receive-only; no transmit antenna is available"),
-            [](bool connected, const RadioCapabilities& caps) {
-                return !connected || caps.canTransmit;
-            });
+            txAntennaFieldAvailable);
         m_filterAvailability->registerRestriction(m_rxAntBtn,
             tr("This receiver has one fixed receive input"),
             [this](bool connected, const RadioCapabilities& caps) {
                 const bool virtualAntennas = m_kiwiSdrManager
                     && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
-                return !connected || caps.canTransmit || !m_slice
-                    || m_slice->rxAntennaList().size() != 1 || virtualAntennas;
+                return rxAntennaFieldAvailable(connected, caps, m_slice, virtualAntennas,
+                    m_radioModel && m_radioModel->hasStationAntennas());
             });
         m_filterAvailability->registerRestriction(m_ritContainer,
             tr("Receive incremental tuning is unavailable in this mode"),
@@ -2249,6 +2269,12 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &RxApplet::updateAntennaButtons);
+        // Re-evaluate the RX ANT restriction first (a switch bound later opens
+        // it), then redraw, so a lifted restriction does not restore a stale tooltip.
+        connect(m_radioModel, &RadioModel::stationAntennasChanged, this, [this] {
+            if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
+            updateAntennaButtons();
+        });
         // Slot-occupancy changes (other Multi-Flex clients connecting /
         // disconnecting, slots claimed / released) restyle the slice tab
         // row so foreign slots dim and free slots open back up (#2606).
@@ -2262,6 +2288,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
             m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
+            m_squelchGateModes = connected ? caps.squelchGateModes : QStringList{};
+            applySqlGateVisuals();
             if (m_exclusiveSquelch && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
@@ -2646,6 +2674,18 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
         : QStringLiteral("%1 antenna port: %2")
               .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
                    full));
+
+    // A Kiwi receiver on this slice still wins for RX.
+    if (profileId.isEmpty()) {
+        if (const auto station = stationAntennaField(m_radioModel, m_slice, tx)) {
+            const QString stationText =
+                fm.elidedText(station->text, Qt::ElideRight, kMaxWidth - kPad);
+            button->setText(stationAntennaActionText(stationText));
+            button->setFixedWidth(
+                qBound(kMinWidth, fm.horizontalAdvance(stationText) + kPad, kMaxWidth));
+            button->setToolTip(station->toolTip);
+        }
+    }
     if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
@@ -3036,6 +3076,8 @@ void RxApplet::connectSlice(SliceModel* s)
         m_afSlider->setValue(static_cast<int>(g));
     });
 
+    connect(s, &SliceModel::squelchGateChanged, this, [this] { applySqlGateVisuals(); });
+    connect(s, &SliceModel::modeChanged, this, [this] { applySqlGateVisuals(); });
     connect(s, &SliceModel::squelchChanged, this, [this, applySquelchState](bool on, int level) {
         if (m_slice && m_slice->externalReceiveReplacementActive()) {
             return;

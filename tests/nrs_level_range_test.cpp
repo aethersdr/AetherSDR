@@ -132,7 +132,7 @@ struct Fixture {
             return false;
         }
         RadioConnectionSessionTestAccess::connected(*backend->connection(), true);
-        backend->setSliceCommandSink([this](const QString& command) {
+        backend->setSliceCommandSinkForTest([this](const QString& command) {
             commands.append(command);
         });
         RadioNicknameTestAccess::firmware(radio, version);
@@ -145,7 +145,7 @@ struct Fixture {
     {
         // The recorder cannot outlive its captured storage during teardown.
         if (backend) {
-            backend->setSliceCommandSink({});
+            backend->setSliceCommandSinkForTest({});
             RadioConnectionSessionTestAccess::connected(*backend->connection(), false);
         }
     }

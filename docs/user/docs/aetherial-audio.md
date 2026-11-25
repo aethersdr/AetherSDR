@@ -367,6 +367,14 @@ that suits contests better than rag-chews.
 Analog-style saturation for warmth and harmonic color: the mic preamp, first
 in AetherTX's default chain.
 
+In the compact **Tube** tile, Tab between **Drive**, **Tone**, **Bias**,
+**Output** and **Mix**. Each knob reports its name, value and range to a screen
+reader. Arrow keys adjust the focused knob, even with keyboard shortcuts on;
+hold Shift for finer steps, use Page Up/Page Down for large steps, or use
+Home/End for its minimum/maximum. Value
+announcements wait until adjustments pause for 250 ms, and unchanged background
+polling stays silent.
+
 **RN2** (AetherTX only): the RNNoise microphone denoiser, at the left of the
 Tube page's toolbar. It runs ahead of the tube and every other stage, so noise
 is removed before anything can amplify it, and it replaces the gate AetherTX

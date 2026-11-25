@@ -989,17 +989,26 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
                 .arg(m_radioModel.maxPanadapters());
             return out;
         }
-        AppSettings::instance().setValue(QStringLiteral("PanadapterLayout"), layoutId);
-        AppSettings::instance().save();
-        applyPanLayout(layoutId);  // Same production path as the layout selector.
+        auto& settings = AppSettings::instance();
+        const QString previousLayout = settings.value(QStringLiteral("PanadapterLayout"),
+                                                      QStringLiteral("1")).toString();
+        settings.setValue(QStringLiteral("PanadapterLayout"), layoutId);
+        settings.save();
+        // Same production path as the layout selector.
+        const QString appliedLayout = applyPanLayout(layoutId, previousLayout);
+        if (appliedLayout != layoutId) {
+            settings.setValue(QStringLiteral("PanadapterLayout"), appliedLayout);
+            settings.save();
+        }
+        const int appliedPanCount = panCellsForLayout(appliedLayout).size();
         const int activeMainPanCount = canvasEnabled
             ? m_workspaceController->activeMainPanIdsForLayout().size()
             : (m_panStack ? m_panStack->count() : 0);
-        out[QStringLiteral("layout")] = layoutId;
-        out[QStringLiteral("targetPanCount")] = targetPanCount;
+        out[QStringLiteral("layout")] = appliedLayout;
+        out[QStringLiteral("targetPanCount")] = appliedPanCount;
         out[QStringLiteral("panCount")] = activeMainPanCount;
         out[QStringLiteral("globalPanCount")] = m_panStack ? m_panStack->count() : 0;
-        out[QStringLiteral("settling")] = (beforeCount != targetPanCount);
+        out[QStringLiteral("settling")] = (beforeCount != appliedPanCount);
         out[QStringLiteral("canvasEnabled")] = canvasEnabled;
         return out;
     }

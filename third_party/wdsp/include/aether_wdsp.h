@@ -91,6 +91,8 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 void SetRXAFMLimGain(int channel, double maximumGainDb);
 void SetRXAFMLimRun(int channel, int run);
 void SetRXAPanelGain1(int channel, double gain);
+// bin 0 copies I into Q at the output panel (L == R); 1 is create_rxa()'s copy 0.
+void SetRXAPanelBinaural(int channel, int bin);
 void SetRXABandpassFreqs(int channel, double lowHz, double highHz);
 // Canonical passband setter. RXASetPassband() is what both reference clients
 // (Thetis, pihpsdr) call: it sets the bandpass AND the SNBA output bandwidth
@@ -358,6 +360,10 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 //          against 10^(thresholdDb/20) of wire full scale. Any mode.
 void SetRXAFMSQRun(int channel, int run);
 void SetRXAFMSQThreshold(int channel, double threshold);
+// Patch 24: 1 while fmsq passes audio (any state but MUTED, so ramps and the
+// tail count as open), 0 while muted or flushed, as of the last processed
+// block. Lock-free; meaningful only while the stage runs.
+int GetRXAFMSQGateOpen(int channel);
 void SetRXAAMSQRun(int channel, int run);
 void SetRXAAMSQThreshold(int channel, double thresholdDb);
 void SetTXAMode(int channel, int mode);
@@ -387,6 +393,13 @@ enum AetherWdspRxMeter
     AETHER_WDSP_RXA_AGC_GAIN = 4
 };
 double GetRXAMeter(int channel, int meterType);
+// TXA meter readouts (TXA.h txaMeterType), written once per DSP block. ALC_GAIN
+// is TXA's ALC gain at the block's end in dB, positive = reduction, 0 = idle.
+enum AetherWdspTxMeter
+{
+    AETHER_WDSP_TXA_ALC_GAIN = 14
+};
+double GetTXAMeter(int channel, int meterType);
 
 // ── Neural Noise Reduction (NNR, nnr.c — new in WDSP 2.10) ────────────────
 //

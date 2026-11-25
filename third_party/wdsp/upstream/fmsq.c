@@ -128,6 +128,8 @@ void flush_fmsq (FMSQ a)
 	a->avnoise = 100.0;
 	a->longnoise = 1.0;
 	a->state = 0;
+	// AetherSDR patch 24: a flushed gate is muted.
+	InterlockedExchange (&a->gatePublished, 0L);
 	a->ready = 0;
 	a->ramp = 0.0;
 }
@@ -202,6 +204,9 @@ void xfmsq (FMSQ a)
 				break;
 			}
 		}
+		// AetherSDR patch 24: published once per block for a reader on another
+		// thread. Every state but MUTED passes audio, ramps and tail included.
+		InterlockedExchange (&a->gatePublished, a->state != MUTED ? 1L : 0L);
 	}
 	else if (a->insig != a->outsig)
 		memcpy (a->outsig, a->insig, a->size * sizeof (complex));
@@ -250,6 +255,14 @@ void SetRXAFMSQThreshold (int channel, double threshold)
 	rxa[channel].fmsq.p->tail_thresh = threshold;
 	rxa[channel].fmsq.p->unmute_thresh = 0.9 * threshold;
 	LeaveCriticalSection (&ch[channel].csDSP);
+}
+
+PORT
+int GetRXAFMSQGateOpen (int channel)
+{
+	// AetherSDR patch 24: lock-free, so a DSP-rate poller never waits on
+	// csDSP. InterlockedAnd with an all-ones mask is the port's atomic load.
+	return (int)InterlockedAnd (&rxa[channel].fmsq.p->gatePublished, ~0L);
 }
 
 PORT

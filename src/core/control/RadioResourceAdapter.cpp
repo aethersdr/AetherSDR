@@ -215,6 +215,10 @@ RadioResourceAdapter::RadioResourceAdapter(
             publishRadioSession();
         }
     });
+    connect(m_radio, &RadioModel::txTimeoutSettingsChanged,
+            this, &RadioResourceAdapter::publishRadioSession);
+    connect(m_radio, &RadioModel::txTimeoutLatchChanged,
+            this, &RadioResourceAdapter::publishRadioSession);
     connect(m_radio, &RadioModel::frontEndOverloadChanged,
             this, [this](const FrontEndOverload& state) {
                 m_frontEndOverload = state;
@@ -448,6 +452,14 @@ void RadioResourceAdapter::publishRadioSession()
     if (m_telemetry) {
         value.insert(QStringLiteral("meterDelivery"), m_telemetry->meterDelivery());
     }
+    // Read-only bound on one key-down (RFC #7021); the radio's own interlock
+    // timeout, where it has one, may end an over sooner.
+    const TxTimeoutSettings txTimeout = m_radio->txTimeoutSettings();
+    value.insert(QStringLiteral("transmitTimeout"), QJsonObject{
+        {QStringLiteral("enabled"), txTimeout.enabled},
+        {QStringLiteral("timeoutS"), txTimeout.timeoutS},
+        {QStringLiteral("warningS"), txTimeout.warningS},
+        {QStringLiteral("latched"), m_radio->txTimeoutLatched()}});
     if (m_connectionTarget) {
         QString state;
         switch (m_connectionTarget->state()) {

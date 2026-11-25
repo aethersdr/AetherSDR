@@ -26,6 +26,7 @@ public:
     static void line(RadioModel& model, const QString& text) { model.handleLineForTest(text); }
     static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
+    static bool profileHold(const RadioModel& model) { return model.profileLoadRadioStateWritesHeld(); }
 };
 }
 
@@ -51,6 +52,33 @@ void seed()
 {
     const QJsonObject document = QJsonDocument::fromJson(LocalMemoryStore::serialize({})).object();
     check(AppSettings::instance().setRadioFeature("local", "", "MemoryBank", 1, document), "isolated bank seeded");
+}
+void profilePolicyUsesBackendDispatch()
+{
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    QStringList commands;
+    QList<FlexCommandTestAccess::Reply> replies;
+    FlexCommandTestAccess::record(*backend, [&](const QString& text, FlexCommandTestAccess::Reply reply) {
+        commands.append(text);
+        replies.append(std::move(reply));
+    });
+    int started = 0;
+    int completed = 0;
+    QObject::connect(&model, &RadioModel::profileLoadStarted, &model, [&] { ++started; });
+    QObject::connect(&model, &RadioModel::profileLoadCompleted, &model, [&] { ++completed; });
+    check(model.requestProfile({ProfileRequest::Kind::Global, ProfileRequest::Action::Load, "RX layout"})
+        == ReceiveDispatch::Dispatched, "global recall uses the production backend dispatcher");
+    check(started == 1 && completed == 0 && StoredControlTestAccess::profileHold(model),
+        "global recall holds model radio-state writes before its reply");
+    check(backend->requestPanDisplay("0x40000000", "0x40000001",
+        {PanDisplayField::WaterfallColorGain, 50}) == ReceiveDispatch::Unsupported
+        && commands.size() == 1, "backend also suppresses a bypassed profile-owned write");
+    const auto answer = replies.first();
+    answer(0, {});
+    answer(0, {});
+    check(completed == 1 && StoredControlTestAccess::profileHold(model),
+        "one accepted reply completes recall once and extends its hold");
 }
 void encoders()
 {
@@ -130,9 +158,17 @@ void encoders()
     MemoryRequest recall{MemoryRequest::Action::Recall, 7, {}};
     recall.sliceId = 3; recall.recall = channel();
     backend.requestMemory(recall);
-    check(backend.commands == QStringList{"memory apply 7", "slice tune 3 146.520000 autopan=0", "slice set 3 step=100",
+    check(backend.commands == QStringList{"slice set 3 active=1", "memory apply 7", "slice tune 3 146.520000 autopan=0", "slice set 3 step=100",
         "slice set 3 repeater_offset_dir=down fm_repeater_offset_freq=0.600000 tx_offset_freq=-0.600000 fm_tone_mode=ctcss_tx fm_tone_value=88.5"},
-        "recall preserves ordered retune/step/repeater correction");
+        "recall makes the target active, then preserves ordered retune/step/repeater correction");
+    // If the active write is refused (e.g. the profile-load hold drops slice
+    // writes), the recall is refused whole: memory apply would land on
+    // whatever slice the radio has active.
+    backend.commands.clear();
+    backend.refusePrefix = QStringLiteral("slice set ");
+    check(backend.requestMemory(recall) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(),
+          "recall refused before memory apply when the active write cannot be sent");
+    backend.refusePrefix.clear();
     backend.commands.clear();
     update.patch.freq = std::numeric_limits<double>::infinity();
     check(backend.requestMemory(update) == ReceiveDispatch::Unsupported && backend.commands.isEmpty(), "nonfinite memory refuses before dispatch");
@@ -497,6 +533,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
+    profilePolicyUsesBackendDispatch();
     encoders(); cwProfileState(); cwProfileRawStatus(); cwProfileLateCapability(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
     return failures == 0 ? 0 : 1;
 }

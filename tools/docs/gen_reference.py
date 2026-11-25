@@ -640,23 +640,21 @@ def parse_shortcuts():
                          "forwards as category TX with keysTx=true")
     helper_pos = forwarded[0][0]
 
-    # The registry's publishShortcuts() callback forwards each declaration to
-    # registerAction; the declarations themselves are read from
+    # publishShortcuts(m_shortcutManager) registers each declaration inside
+    # ControlActionRegistry.cpp; the declarations themselves are read from
     # MainWindow_ControlActions.cpp (parse_control_actions).
-    pub = [p for p, _ in calls(src, r"\bm_controlActions\.publishShortcuts")]
+    pub = list(calls(src, r"\bm_controlActions\.publishShortcuts"))
     if len(pub) != 1:
         raise ParseError(f"{src.rel}: expected one m_controlActions.publishShortcuts(), "
                          f"found {len(pub)}")
-    pub_open = src.code.index("(", pub[0])
-    pub_fwd = [p for p, _ in calls(src, r"\.registerAction", pub_open,
-                                   match_close(src.code, pub_open))]
-    if len(pub_fwd) != 1:
-        raise ParseError(f"{src.where(pub_open)}: publishShortcuts() should forward "
-                         f"through one registerAction call, found {len(pub_fwd)}")
+    pub_pos, pub_args = pub[0]
+    if [a.strip() for a in pub_args] != ["m_shortcutManager"]:
+        raise ParseError(f"{src.where(pub_pos)}: expected "
+                         f"publishShortcuts(m_shortcutManager), got {pub_args}")
 
     entries = []  # (pos, dict)
     for pos, args in calls(src, r"\.registerAction"):
-        if pos in (helper_pos, pub_fwd[0]):
+        if pos == helper_pos:
             continue
         where = src.where(pos)
         if len(args) < 5:
@@ -719,7 +717,7 @@ def parse_shortcuts():
     # Fail loudly on a registration the strict parser did not see.
     loose = len(re.findall(r"\bregisterAction\s*\(", src.code)) + \
         len(re.findall(r"(?<![\w.])registerTxShortcut\s*\(", src.code))
-    seen = len({pos for pos, _ in entries}) + 2  # + the two forwarding calls
+    seen = len({pos for pos, _ in entries}) + 1  # + registerTxShortcut's forward
     if loose != seen:
         raise ParseError(f"{src.rel}: {loose} registration sites, parsed {seen}")
 
@@ -849,7 +847,7 @@ def parse_control_actions():
         chain = call_chain(src.code, close)
         names = [c[0] for c in chain]
         unknown = set(names) - {"inMidiCategory", "repeating", "when", "stepping",
-                                "transmitSetup"}
+                                "transmitSetup", "transmitDrive"}
         if unknown:
             raise ParseError(f"{where}: unrecognised chained call(s) {sorted(unknown)}")
         kind = m.group(1)

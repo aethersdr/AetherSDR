@@ -76,13 +76,19 @@ public:
         // (Hl2TxLevelPolicy.h, +40 dB), not here. Fast attack, slow release, so
         // over-level input is limited rather than flat-topped by the clamp.
         bool alcEnabled = true;
-        double alcTargetPeak = 0.85;   // leave headroom below clipping
+        // 0.95 keeps the peak into TXA's own ALC (threshold 0.99742) below it in
+        // every mode, so WDSP's ALC stays a safety net: TXA's AM/DSB/FM bandpass
+        // (100..3000 Hz) lifts a voice peak x1.034, so 0.98 would make it act and
+        // the ceiling is ~0.965. Nothing reaches the int16 clamp (max |I|,|Q| 0.953).
+        double alcTargetPeak = 0.95;
         // No attack constant: each sample that needs the reduction has it
         // (Hl2TxAlc.h), so nothing overshoots into the hard clamp.
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
+    // Applied at once. Hl2Backend refuses both while keyed: in the TXA build a
+    // mid-over bandpass swap splatters.
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Linear gain applied to the audio before modulation. 1.0 = unity.
@@ -190,8 +196,10 @@ public slots:
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);
-    // Drop anything buffered — on unkey, so the next transmission does not
-    // start with the tail of the previous one.
+    // Ends the over: drops anything buffered and stops the channel, so the next
+    // transmission does not start with the tail of this one. Hl2Backend posts it
+    // at unkey, and at a re-key whose unkey cleanup was skipped (#7216);
+    // processAudioBlock() runs it on a new context.
     void reset();
 
 signals:

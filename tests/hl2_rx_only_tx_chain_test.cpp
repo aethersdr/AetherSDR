@@ -3,7 +3,8 @@
 // aetherd constructs the HL2 receive only (setHostOffersTransmit(false)), and
 // that decision is taken once, in the constructor, so a transmit modulator
 // opened at connect could never be keyed. The control case is the
-// transmit-capable backend, which must still build it.
+// transmit-capable backend, which must still build it. txPowerMaxWatts (aetherd's
+// maximumTransmitWatts) follows the same gate: the 5 W rating, or 0 receive only.
 //
 // Socket-free, with hl2_gain_restore_test's harness: boardMaxRx skips the
 // unicast discovery socket and no event loop is pumped, so finishDspSetup()
@@ -11,6 +12,7 @@
 // thread; a blocking call queued behind it reads the result there.
 
 #include "TestSettingsProfile.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 
@@ -54,17 +56,19 @@ void check(bool condition, const char* what)
 
 struct ConnectResult {
     bool canTransmit = true;
+    double txPowerMaxWatts = -1.0;
     bool txConfigured = true;
     int setupTotal = -1;
 };
 
 ConnectResult connectOnce(bool hostOffersTransmit)
 {
-    Hl2Backend::setHostOffersTransmit(hostOffersTransmit);
+    AetherSDR::setHostOffersTransmit(hostOffersTransmit);
     ConnectResult out;
     {
         Hl2Backend backend;
         out.canTransmit = backend.capabilities().canTransmit;
+        out.txPowerMaxWatts = backend.capabilities().txPowerMaxWatts;
         // beginDspSetup() announces its step count synchronously, on this thread.
         QObject::connect(&backend, &Hl2Backend::dspSetupProgress, &backend,
                          [&out](const QString&, int, int total) {
@@ -80,7 +84,7 @@ ConnectResult connectOnce(bool hostOffersTransmit)
         out.txConfigured = Hl2RxOnlyTxChainTestAccess::txChainConfigured(backend);
         backend.disconnectRadio();
     }
-    Hl2Backend::setHostOffersTransmit(true);
+    AetherSDR::setHostOffersTransmit(true);
     return out;
 }
 
@@ -97,10 +101,14 @@ int main(int argc, char** argv)
     const ConnectResult tx = connectOnce(true);
     check(tx.canTransmit, "control: the transmit-capable backend declares canTransmit");
     check(tx.txConfigured, "control: its connect builds the transmit chain");
+    check(tx.txPowerMaxWatts == 5.0,
+          "the transmit-capable backend declares the 5 W rating as txPowerMaxWatts");
 
     const ConnectResult rx = connectOnce(false);
     check(!rx.canTransmit, "the receive-only backend declares canTransmit false");
     check(!rx.txConfigured, "its connect builds no transmit chain");
+    check(rx.txPowerMaxWatts == 0.0,
+          "the receive-only backend declares txPowerMaxWatts 0, as RX-only radios do");
     check(tx.setupTotal >= 1 && rx.setupTotal >= 1,
           "both connects announced their DSP setup steps");
     check(rx.setupTotal == tx.setupTotal - (AETHER_HL2_TX_TXA ? 1 : 0),

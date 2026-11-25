@@ -10,12 +10,10 @@ using namespace AetherSDR;
 
 namespace {
 
+// The overload MainWindow uses, so the test registers exactly what the app does.
 void publish(const ControlActionRegistry& reg, ShortcutManager& sm)
 {
-    reg.publishShortcuts([&](const ControlActionShortcutSpec& spec) {
-        sm.registerAction(spec.id, spec.name, spec.category, spec.defaultKey, spec.handler,
-                          spec.autoRepeat);
-    });
+    reg.publishShortcuts(sm);
 }
 
 const ShortcutManager::Action* find(const ShortcutManager& m, const QString& id)
@@ -107,6 +105,48 @@ private slots:
         specs[0].set(42.0f);
         QCOMPARE(level, 42.0f);
         QCOMPARE(specs[0].get(), 42.0f);
+    }
+
+    // RF power sets transmit drive: the bridge refuses both of its keys while
+    // the power ceiling is armed, whatever TX permission is (#5851), the
+    // operator's keyboard (the handler) is never refused, and a level that is
+    // not drive stays unmarked.
+    void transmitDriveGatesTheBridgeNotTheKeyboard()
+    {
+        ControlActionRegistry reg;
+        float power = 50.0f;
+        float mic = 50.0f;
+        QVERIFY(reg.add(ControlAction::level("rf_power", "tx.rfPower", "RF Power", "TX",
+                                             0, 100, 5,
+                                             [&](float v) { power = v; },
+                                             [&] { return power; })
+                            .transmitDrive()));
+        QVERIFY(reg.add(ControlAction::level("mic_level", "phone.micLevel", "Mic Level", "TX",
+                                             0, 100, 5,
+                                             [&](float v) { mic = v; },
+                                             [&] { return mic; })));
+        ShortcutManager sm;
+        publish(reg, sm);
+        for (const char* id : {"rf_power_up", "rf_power_down"}) {
+            const auto* a = find(sm, QString::fromLatin1(id));
+            QVERIFY(a);
+            QVERIFY2(a->setsTxDrive, id);
+            QVERIFY2(!a->keysTx, id);
+            // Drive, not keying (#5851): runs with the ceiling off, whatever TX
+            // permission is; a step cannot be bounded, so refused while armed.
+            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*txCeilingArmed=*/false), id);
+            QVERIFY2(ShortcutManager::bridgeRefusesTxDrive(*a, /*txCeilingArmed=*/true), id);
+        }
+        for (const char* id : {"mic_level_up", "mic_level_down"}) {
+            const auto* a = find(sm, QString::fromLatin1(id));
+            QVERIFY(a);
+            QVERIFY2(!a->setsTxDrive, id);
+            QVERIFY2(!ShortcutManager::bridgeRefusesTxDrive(*a, /*txCeilingArmed=*/true), id);
+        }
+        find(sm, "rf_power_up")->handler();
+        QCOMPARE(power, 55.0f);
+        find(sm, "rf_power_down")->handler();
+        QCOMPARE(power, 50.0f);
     }
 
     void unavailableActionRefusesOnEverySurface()

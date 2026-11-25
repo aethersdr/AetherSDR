@@ -7,13 +7,13 @@
 // datagram arrived.
 //
 // The point is that this exercises the SHIPPING path: the same
-// installEmergencyStopSignalHandlers() main() calls, the same arm() inside
+// installFatalSignalRelease() both main()s call, the same arm() inside
 // MetisClient::start(), and a real signal delivered by a real kill(2). A unit
 // test that called fireEmergencyStop() directly would prove only that sendto()
 // works — it would not prove the handler is installed, that arming happened, or
 // that the descriptor is still valid at the moment the process dies.
 
-#include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/FatalSignalRelease.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
@@ -44,7 +44,7 @@ int main(int argc, char** argv)
             installHandlers = false;
     }
     if (installHandlers)
-        AetherSDR::hl2::installEmergencyStopSignalHandlers();
+        AetherSDR::installFatalSignalRelease();
 
     AetherSDR::hl2::MetisClient client;
     AetherSDR::hl2::MetisClient::Params p;

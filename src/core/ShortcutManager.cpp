@@ -378,6 +378,12 @@ void ShortcutManager::markHoldKeyAction(const QString& actionId)
         a->holdKey = true;
 }
 
+void ShortcutManager::markTxDriveAction(const QString& actionId)
+{
+    if (auto* a = action(actionId))
+        a->setsTxDrive = true;
+}
+
 QString ShortcutManager::bindingRefusal(const Action& action, const QKeySequence& key)
 {
     if (key.isEmpty() || !isShortcutSidedKey(key[0].key()))

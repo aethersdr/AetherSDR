@@ -23,3 +23,6 @@ scripts/setup/rtl-async-cancellation.patch text eol=lf whitespace=-trailing-spac
 # tables are the on-air format: no line-ending conversion, and no whitespace
 # checks on files AetherSDR does not own.
 third_party/data2g/** linguist-vendored -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof
+
+# cmd.exe needs CRLF in batch files.
+tools/flex-tailnet-shim/*.bat text eol=crlf

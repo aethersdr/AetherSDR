@@ -123,6 +123,10 @@ Frequency, mode, passband, sample rate and RF gain are saved per dongle, keyed b
 
 ## Troubleshooting
 
+### The app closes during an RTL retune or disconnect
+
+Update to a build that includes the [RTL transfer cancellation fix](https://github.com/aethersdr/AetherSDR/issues/7397). Older builds could release USB transfers while cancellation callbacks were still pending; the crashes were seen on Windows. If the problem continues after updating, include the AetherSDR version and the Windows crash report when filing an issue.
+
 ### No dongle in the list and no RTL-SDR (USB) radio type
 
 Your copy of AetherSDR was built without the RTL-SDR backend.

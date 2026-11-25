@@ -18,6 +18,7 @@
 #include "FloatingRestorePolicy.h"
 #include "FramelessMessageBox.h"
 #include "MixerControlAvailability.h"
+#include "PcMicGain.h"
 #include "PhoneCwApplet.h"
 #include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
@@ -49,6 +50,7 @@
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
+#include "PanLayoutShrinkPolicy.h"
 #include "CatControlApplet.h"
 #include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
@@ -148,20 +150,6 @@ void MainWindow::refreshNetworkQualityIndicators()
 }
 
 namespace {
-QString defaultPanLayoutForCount(int panCount)
-{
-    static const QMap<int, QString> kDefaultLayouts = {
-        {1, QStringLiteral("1")},
-        {2, QStringLiteral("2v")},
-        {3, QStringLiteral("2h1")},
-        {4, QStringLiteral("2x2")},
-        {5, QStringLiteral("3h2")},
-        {6, QStringLiteral("2x3")},
-        {7, QStringLiteral("4h3")},
-        {8, QStringLiteral("2x4")}
-    };
-    return kDefaultLayouts.value(panCount, QStringLiteral("1"));
-}
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
 constexpr int kProfileLoadMinRenderableFrameBins = 128;
 
@@ -705,6 +693,8 @@ void MainWindow::wireDiscovery()
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(m_connPanel, &ConnectionPanel::remoteEngineRestored,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
 
     // aetherd Gap B (Step 2b-2): Hermes-Lite 2 radios answer HPSDR discovery on
     // UDP/1024, which the Flex discovery above never sees. Feed them into the
@@ -1858,10 +1848,10 @@ void MainWindow::wireRadioModel()
         // radio owns the actual input path. Starting QAudioSource here on
         // macOS pins Bluetooth output in telephony mode.
         if (m_radioModel.transmitModel().micSelection() == "PC") {
-            // Restore PC mic gain from client-side settings (radio has no
-            // hardware gain stage for PC input — client-authoritative)
-            int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
-            m_audio->setPcMicGain(gain);
+            // Apply the client-side PC mic gain (the radio has no hardware
+            // gain stage for PC input): the saved value, or unity on a
+            // host-modulating radio (pcMicGainPercent).
+            m_audio->setPcMicGain(pcMicGainPercent(m_radioModel.transmitModel()));
             if (!m_audio->isTxStreaming()) {
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             }
@@ -1870,6 +1860,10 @@ void MainWindow::wireRadioModel()
         }
         qDebug() << "MainWindow: remote audio TX stream ID set to" << Qt::hex << streamId;
     });
+    // Connected ahead of the capture start/stop below: the gain is in place
+    // before capture starts.
+    bindPcMicGain(m_radioModel.transmitModel(), this,
+                  [this](int percent) { m_audio->setPcMicGain(percent); });
     // Start/stop PC audio TX when mic_selection changes
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this]() {
@@ -1881,9 +1875,6 @@ void MainWindow::wireRadioModel()
         }, Qt::QueuedConnection);
 #endif
         if (m_radioModel.transmitModel().micSelection() == "PC") {
-            // Restore PC mic gain from client-side settings
-            int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
-            m_audio->setPcMicGain(gain);
             // Only start if a TX stream is already assigned (avoid streamId=0).
             // Voice TX (USB/LSB/AM/FM) flows over remote_audio_tx, NOT dax_tx —
             // gating solely on txStreamId() (the dax_tx id) meant that when no
@@ -1894,8 +1885,6 @@ void MainWindow::wireRadioModel()
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             }
         } else {
-            // Reset to full gain — radio handles hardware mic gain
-            m_audio->setPcMicGain(100);
             audioStopTx();
         }
         // PooDoo Audio readiness indicator — turn the chain widget's
@@ -2070,10 +2059,12 @@ void MainWindow::wireRadioModel()
             }
         });
         m_iambicKeyer->setOnRoutedKeyDownChange([this](bool down,
-                std::chrono::steady_clock::time_point when, const TxCoordinator::Request& input) {
+                std::chrono::steady_clock::time_point when, std::chrono::steady_clock::time_point releaseAt,
+                const TxCoordinator::Request& input) {
             m_radioModel.queueProducerCwKeyEdge(input, down, QStringLiteral("cw:iambic-keyer"),
                 m_lastCwPaddleTraceId.load(std::memory_order_relaxed),
-                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when);
+                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when,
+                /*hostTextGates=*/false, {}, releaseAt);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -2862,7 +2853,7 @@ void MainWindow::wirePanLifecycle()
                         .value("PanadapterLayout", "1").toString();
                     const QString layoutId = panCountForLayoutId(saved) == panCount
                         ? saved
-                        : defaultPanLayoutForCount(panCount);
+                        : PanLayoutShrinkPolicy::defaultLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
                         .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
@@ -3026,7 +3017,7 @@ void MainWindow::wirePanLifecycle()
         // to avoid leaving empty nested splitter cells behind.
         int remaining = m_panStack->count();
         if (remaining > 1) {
-            m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));
+            m_panStack->rearrangeLayout(PanLayoutShrinkPolicy::defaultLayoutForCount(remaining));
         }
     });
 
@@ -3497,6 +3488,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     // Provably null here: the early return above covers every live server,
     // listening or still waiting for its token.
     m_automation = std::make_unique<AutomationServer>();
+    connect(m_automation.get(), &AutomationServer::agentActivityChanged,
+            this, &MainWindow::agentActivityChanged);
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type
@@ -3530,13 +3523,14 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             return automationModemCommand(verb, action, value, controller, input);
         });
     m_automation->setShortcutAutomationHandler(
-        [this](const QString& id, bool allowTx, const std::shared_ptr<TxController>& controller) {
-            return fireShortcutAction(id, allowTx, controller);
+        [this](const QString& id, bool allowTx, bool txCeilingArmed,
+               const std::shared_ptr<TxController>& controller) {
+            return fireShortcutAction(id, allowTx, txCeilingArmed, controller);
         });
     m_automation->setKeyEventAutomationHandler(
-        [this](const QString& spec, bool press, bool allowTx,
+        [this](const QString& spec, bool press, bool allowTx, bool txCeilingArmed,
                const std::shared_ptr<TxController>& controller) {
-            return injectKeyEventForAutomation(spec, press, allowTx, controller);
+            return injectKeyEventForAutomation(spec, press, allowTx, txCeilingArmed, controller);
         });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
@@ -3558,6 +3552,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setSerialSnapshotHandler(
+        [this]() { return automationSerialSnapshot(); });
     m_automation->setTitleBarSnapshotHandler(
         [this]() { return automationTitleBarSnapshot(); });
     m_automation->setTitleBarActionHandler(

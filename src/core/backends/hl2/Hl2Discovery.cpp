@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include <QHash>
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
 #include <QNetworkAddressEntry>
@@ -45,6 +46,14 @@ void enableBroadcast(QUdpSocket& s) noexcept
 #else
     ::setsockopt(static_cast<int>(fd), SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
 #endif
+}
+
+// Every discovery socket leaves the same way. close() runs on the GUI thread;
+// see refreshSockets() for why that is kept off the steady-state path.
+void dropSocket(QUdpSocket* s)
+{
+    s->close();
+    s->deleteLater();
 }
 
 }  // namespace
@@ -239,10 +248,8 @@ void Hl2Discovery::stop()
 {
     if (m_timer)
         m_timer->stop();
-    for (QUdpSocket* socket : std::as_const(m_sockets)) {
-        socket->close();
-        socket->deleteLater();
-    }
+    for (QUdpSocket* socket : std::as_const(m_sockets))
+        dropSocket(socket);
     m_sockets.clear();
     m_seen.clear();
     m_notices.reset();
@@ -269,6 +276,7 @@ void Hl2Discovery::sweepNow()
     if (m_sockets.isEmpty())
         return;
     const auto pkt = discoveryRequest();
+    QList<QUdpSocket*> broken;
     for (QUdpSocket* socket : std::as_const(m_sockets)) {
         const QHostAddress local = socket->localAddress();
         QHostAddress directedBroadcast;
@@ -310,18 +318,28 @@ void Hl2Discovery::sweepNow()
             m_notices.sendSucceeded(local);
         } else {
             m_notices.sendFailed(local, error);
+            broken.append(socket);
         }
+    }
+    // A socket that could send nothing may have been invalidated by the OS
+    // (sleep/wake, address flap) while staying BoundState; it is rebound on
+    // the next sweep. On the #7476 host, close() after only failed sends took
+    // ~0 ms; a socket that had sent successfully before failing may still
+    // take the ~1 s, once.
+    for (QUdpSocket* socket : std::as_const(broken)) {
+        m_sockets.removeOne(socket);
+        dropSocket(socket);
     }
 }
 
 void Hl2Discovery::refreshSockets()
 {
-    for (QUdpSocket* socket : std::as_const(m_sockets)) {
-        socket->close();
-        socket->deleteLater();
-    }
-    m_sockets.clear();
-
+    // Sockets persist across sweeps; here only those whose address went away
+    // are closed (sweepNow() drops ones that could send nothing). This runs on
+    // the GUI thread, and under a macOS socket content filter close() on a
+    // socket that sent both a directed and a limited broadcast can block ~1 s.
+    QList<QHostAddress> wanted;
+    QHash<QHostAddress, QString> ifaceNameOf;   // address -> interface display name
     for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
         const auto flags = iface.flags();
         if (!flags.testFlag(QNetworkInterface::IsUp)
@@ -329,25 +347,44 @@ void Hl2Discovery::refreshSockets()
             || flags.testFlag(QNetworkInterface::IsLoopBack)) {
             continue;
         }
-
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
             const QHostAddress local = entry.ip();
-            if (local.protocol() != QAbstractSocket::IPv4Protocol)
-                continue;
-
-            auto* socket = new QUdpSocket(this);
-            if (!socket->bind(local, 0)) {
-                m_notices.bindFailed(iface.humanReadableName(), local,
-                                     socket->errorString());
-                socket->deleteLater();
+            if (local.protocol() != QAbstractSocket::IPv4Protocol
+                || wanted.contains(local)) {
                 continue;
             }
-            enableBroadcast(*socket);
-            connect(socket, &QUdpSocket::readyRead,
-                    this, &Hl2Discovery::onReadyRead);
-            m_sockets.append(socket);
-            m_notices.bindSucceeded(iface.humanReadableName(), local);
+            wanted.append(local);
+            ifaceNameOf.insert(local, iface.humanReadableName());
         }
+    }
+
+    QList<QUdpSocket*> kept;
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        const QHostAddress local = socket->localAddress();
+        if (socket->state() == QAbstractSocket::BoundState
+            && wanted.removeOne(local)) {
+            kept.append(socket);
+            // Refresh the name in case the address moved to another interface.
+            m_notices.bindSucceeded(ifaceNameOf.value(local), local);
+        } else {
+            dropSocket(socket);
+        }
+    }
+    m_sockets = kept;
+
+    for (const QHostAddress& local : std::as_const(wanted)) {
+        const QString ifaceName = ifaceNameOf.value(local);
+        auto* socket = new QUdpSocket(this);
+        if (!socket->bind(local, 0)) {
+            m_notices.bindFailed(ifaceName, local, socket->errorString());
+            socket->deleteLater();
+            continue;
+        }
+        enableBroadcast(*socket);
+        connect(socket, &QUdpSocket::readyRead,
+                this, &Hl2Discovery::onReadyRead);
+        m_sockets.append(socket);
+        m_notices.bindSucceeded(ifaceName, local);
     }
     m_notices.endRefresh(static_cast<int>(m_sockets.size()));
 }

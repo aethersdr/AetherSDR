@@ -5,6 +5,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "core/backends/RadioCapabilities.h"
+#include "models/MeterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -1778,7 +1779,7 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // KEY UP, never "ignore and leave the key down" (Constitution VI).
     const bool down = (args[1].trimmed().toLower() == QLatin1String("true"));
     QMetaObject::invokeMethod(m_model, [model = m_model, down]() {
-        model->sendCwKey(down);
+        model->sendRemoteCwKey(down, QStringLiteral("tci:keyer"));
     }, Qt::QueuedConnection);
     return {};
 }
@@ -2198,6 +2199,60 @@ QString TciProtocol::cmdTxFrequency()
         }
     }
     return {};
+}
+
+std::optional<TciProtocol::HwSensorsEnable>
+TciProtocol::parseHwSensorsEnable(const QString& argText)
+{
+    // §4.7: empty arguments are discarded; true is "true" or "1" in any case.
+    const QStringList args = argText.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    if (args.isEmpty()) {
+        return std::nullopt;
+    }
+    HwSensorsEnable request;
+    const QString flag = args.at(0).trimmed();
+    request.enabled = flag.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0
+                   || flag == QLatin1String("1");
+    if (args.size() > 1) {
+        bool ok = false;
+        const int interval = args.at(1).trimmed().toInt(&ok);
+        if (ok) {
+            request.intervalMs = std::clamp(interval, kHwSensorsMinIntervalMs,
+                                            kHwSensorsMaxIntervalMs);
+        }
+    }
+    return request;
+}
+
+TciProtocol::HwSensorReadings TciProtocol::hwSensorReadings(const RadioCapabilities& caps,
+                                                            const MeterModel& meters,
+                                                            const QString& family)
+{
+    HwSensorReadings r;
+    // Icom's +13.8A meter is Vd, the PA drain voltage, not the supply arg1 names.
+    if (caps.hasSupplyVoltageTelemetry && family != QLatin1String("icom")
+        && MeterModel::vitalIsFresh(meters.hasSupplyVoltage(), meters.supplyVoltsAgeMs())) {
+        r.supplyVolts = meters.supplyVolts();
+    }
+    if (caps.hasPaTemperatureTelemetry
+        && MeterModel::vitalIsFresh(meters.hasPaTemp(), meters.paTempAgeMs())) {
+        r.temperatureC = meters.paTemp();
+    }
+    // PACURRENT is PA drain current, not the device consumption the spec names.
+    return r;
+}
+
+std::optional<QString> TciProtocol::hwSensorsMessage(const HwSensorReadings& r)
+{
+    const auto field = [](const std::optional<double>& v) {
+        return v && std::isfinite(*v) ? QString::number(*v, 'f', 1) : QStringLiteral("NaN");
+    };
+    const auto measured = [](const std::optional<double>& v) { return v && std::isfinite(*v); };
+    if (!measured(r.supplyVolts) && !measured(r.currentAmps) && !measured(r.temperatureC)) {
+        return std::nullopt;
+    }
+    return QStringLiteral("hw_sensors:%1,%2,%3;")
+        .arg(field(r.supplyVolts), field(r.currentAmps), field(r.temperatureC));
 }
 
 } // namespace AetherSDR

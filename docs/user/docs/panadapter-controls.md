@@ -81,6 +81,8 @@ Right-click the spectrum or waterfall:
 | **Link Slice ▸** | Links two slices so tuning one retunes the other. See [Multi-Slice Operation](./multi-slice-operation.md). |
 | **Waterfall Time Markers ▸** | Off, 15 seconds, 30 seconds, 1, 5, 10 or 15 minutes (below). |
 | **Show Tune Guides** | Checkable display option. |
+| **Show WSJT-X Rx/Tx Frequency** | Shows or hides the live Rx/Tx bracket markers for this pan's WSJT-X instance. Per pan; does not affect other panadapters. |
+| **Show Spot Markers** | Shows or hides spot labels (DX cluster, decoded stations, Signal History and QRM History) on this panadapter. Per pan; for DX cluster and decoded-station labels the global Spots setting must also be on. |
 | **Extended Frequency Line** | Extends each slice's frequency line down through the waterfall. |
 | **Extended Passband** | Extends each slice's passband shading down through the waterfall. |
 | **Extended TNF** | Extends each notch down through the waterfall. |
@@ -96,6 +98,7 @@ Center Lock keeps a panadapter centered on one slice as it tunes, independently 
 - With one slice on the pan, the menu item reads **Center Lock Slice A** (checkable).
 - With several slices, a **Center Lock** submenu lists them, active slice first.
 - The lock survives band changes. When it is released, the pan shows "Center Lock released".
+- Closing the pan (its ✕ or **Close Active Panadapter**) forgets its lock. A close that is refused, for example the TX pan while transmitting on the Hermes-Lite 2, keeps the lock.
 - It can also be toggled from a keyboard shortcut (**Center Lock Active Slice**), MIDI, FlexControl and RC-28.
 
 > **Upgrading from an older version:** Center Lock replaces the title-bar Pan Lock button.
@@ -297,8 +300,9 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **Heat Map** | On by default | Colors the spectrum trace by signal strength instead of one color. |
 | **Grid** | On by default | Frequency and dB grid lines. |
 | **Wt Avg** | Off by default | Weighted averaging that favors recent frames. |
+| **Link Rates** | Off by default | While on, moving **FFT FPS** or **WtrFall Rate** on any pan sets every open pan to that rate. Turning it on changes no rate by itself; **Clone to all Pans** makes them match now. AetherSDR remembers it per radio. A pan showing a KiwiSDR waterfall keeps its own waterfall rate. **Reset to Defaults** still resets only its own pan. |
 | **FFT AVG** | 0–100 | Frame averaging. Higher is smoother but slower to react; 0 is unaveraged. |
-| **FFT FPS** | 5–60, default 25 | Spectrum frame rate. While the spectrum is updating, the waterfall scroll and the SmartMTR value labels redraw at this rate too, together with the trace, so a lower FFT FPS also makes them move in coarser steps. |
+| **FFT FPS** | 5–60, default 25 | Spectrum frame rate. While the spectrum is updating, the waterfall scroll and the SmartMTR value labels redraw at this rate too, together with the trace, so a lower FFT FPS also makes them move in coarser steps. With **Link Rates** on, it sets every open pan. |
 | **FFT Smooth** | Off–16 px, default Off | Smooths the trace across frequency by averaging each point with its neighbors this many pixels either side, in linear power, so a dB average doesn't drag the noise floor down; the smoothed floor reads its true average power, about 1–1.5 dB above the middle of the unsmoothed noise. FFT AVG smooths over time; this smooths across the band. Only the trace is affected, not the waterfall. |
 | **De-comb Hz** | Off–600 Hz, default Off | Zoomed in on SSB, the trace and waterfall show each voice as a comb of its pitch harmonics, 100–250 Hz apart. De-comb draws a smooth curve over that comb (a cepstral envelope), keeping the signal's outline and peak level. The value is the widest harmonic spacing it removes: about 300 Hz covers most voices; raise it if a high voice still shows a comb. It rounds a signal's steep edges by about half this width, and carriers closer together than it blur into one. It works on signals more than about 8 dB above the noise; the noise floor itself is left as drawn, and the waterfall is not changed. At wide spans, where the comb isn't resolved, it does nothing. |
 | **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own color button. |
@@ -313,7 +317,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **NB Blank** + **Off/On** | 5–95, default 15 | Suppresses impulse-noise stripes in the waterfall. Higher values blank less. |
 | **Black Level** + **Off / SW / HW** | 0–100, default 50 | Waterfall black point. The button cycles automatic black level: **SW** estimates the noise floor in AetherSDR and the slider sets the offset from it; **HW** uses the radio's own level (FlexRadio only; other radios cycle Off ↔ SW); **Off** is manual. |
 | **WtrFall Gain** | 0–100, default 50 | Waterfall color gain. |
-| **WtrFall Rate** | 1–100, default 100 | Scroll speed: 1 is slowest, 100 fastest. |
+| **WtrFall Rate** | 1–100, default 100 | Scroll speed: 1 is slowest, 100 fastest. With **Link Rates** on, it sets every open pan, and so does dragging the waterfall time scale. |
 
 #### BACKGROUND
 

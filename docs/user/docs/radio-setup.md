@@ -117,7 +117,7 @@ The table shows the current TX profile's values and follows the radio while it's
 | Page | What it covers |
 |------|----------------|
 | **Audio** | The radio's Line Out, Headphone and Front Speaker outputs; audio compression for SmartLink and tailnet connections; packet-loss smoothing; **Prevent system sleep while connected**; PC audio devices, Audio Boost and Audio Buffer; recording. See [Audio Settings](./audio-settings.md). |
-| **Transmit** | TX timings (ACC TX, TX delay, timeout), TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit, interlocks and RCA suppression during TUNE on firmware 4.3 and later). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
+| **Transmit** | TX timings (ACC TX, TX delay, timeout), **Transmit time-out (this computer)**, TX REQ interlock polarity (RCA, Accessory), **PTT Mic Override** (firmware v4.3 and later; see [TX Controls](./tx-controls.md#hardware-ptt-and-the-tx-source)), Max Power, Show TX in Waterfall, Slice/TX Follow, and **TX Band Settings** (per-band RF/tune power, PTT inhibit, interlocks and RCA suppression during TUNE on firmware 4.3 and later). The Show TX in Waterfall choice is remembered per [Hermes-Lite 2](./hermes-lite-2.md); a FlexRadio owns and reports its setting. See [TX Controls](./tx-controls.md). |
 | **Phone & CW** | Microphone bias and +20 dB boost; CW iambic mode, paddle swap, sideband and CWX sync, and CW decoder RX/TX decode; Digital (RTTY mark default). See [CW Decoder](./cw-decoder.md) and [CWX Panel](./cwx-panel.md). |
 | **Receive** | Frequency offset (GPSDO detection, manual calibration) and the 10 MHz reference source |
 | **Filters** | Voice, CW and Digital filter sharpness (Low Latency ↔ Sharp Filters) with Auto buttons, and **Use Low Latency Filters for Digital Modes** |
@@ -131,7 +131,7 @@ The table shows the current TX profile's values and follows the radio while it's
 | **APD** | Adaptive predistortion external sampler per TX antenna. Only on radios that report APD support (FLEX-8000 series). |
 | **USB Cables** | The radio's USB cables, each with a Cable Type of CAT, Bit, BCD, LDPA or Passthrough. See [USB Cable Management](./usb-cable-management.md). |
 | **Peripherals** | Station devices AetherSDR talks to directly: tuners, amplifiers, antenna switches and wattmeters. See [Peripherals](./peripherals.md). |
-| **Serial & Controllers** | USB control surfaces (Ulanzi Dial, Stream Deck+ and HID encoders), serial port and pin assignment for PTT/CW keying, the FlexControl knob, and TMate 2. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md), [USB Control Surfaces](./usb-control-surfaces.md) and [Ulanzi Dial](./ulanzi-dial.md). Present only in builds with serial-port support. |
+| **Serial & Controllers** | USB control surfaces (Ulanzi Dial, Stream Deck+ and HID encoders), serial port and pin assignment for PTT/CW keying, the FlexControl knob, and TMate 2. The serial **Open**/**Close** status shows whether the port actually opened; a failed open stays **Closed**, shows the error, and opens a dialog with the fix ([Linux](./linux.md#serial-pttcw-port-wont-open)). **Close** always closes the port for this session; **Auto-open serial port on startup** only decides whether it opens at launch. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md), [USB Control Surfaces](./usb-control-surfaces.md) and [Ulanzi Dial](./ulanzi-dial.md). Present only in builds with serial-port support. |
 
 ### ONLINE & APPEARANCE
 
@@ -174,6 +174,10 @@ it can be edited while disconnected. See
 1. Connect to your radio before editing a timing.
 2. Enter a whole number. Negative delays are treated as zero; invalid or
    excessively large entries are not sent and restore the radio's reported value.
+
+On a radio with no timeout of its own, **Timeout (sec):** stays dimmed and the
+**Transmit time-out (this computer)** group below it is the time-out that
+applies. See [Transmit time-out](./tx-controls.md#transmit-time-out).
 
 ### Calibration is interrupted by a disconnect
 

@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QByteArray>
 #include <QList>
+#include <QJsonObject>
 #include <functional>
 #include <optional>
 
@@ -113,10 +114,16 @@ public:
     AgPortStatus          portB()             const { return m_portB; }
     int                   lastRadioBand()     const { return m_lastRadioBand; }
 
-    // Select antenna for a port (portId: 1=A, 2=B, antennaId: 1–N).
-    // Sets rxant to antennaId. Sets txant only if the antenna has TX
-    // permission for the current band; otherwise keeps current txant.
+    // Select receive or transmit antenna independently.
+    void selectRxAntenna(int portId, int antennaId);
+    void selectTxAntenna(int portId, int antennaId);
+
+    // Legacy shared selection used by ShackSwitch and callers that do not
+    // distinguish TX/RX. The RX selection is retained while TX follows it
+    // only when the antenna is transmit-capable on the current band.
     void selectAntenna(int portId, int antennaId);
+    bool splitRxTxMode() const;
+    void setSplitRxTxMode(bool split);
 
     // Set auto-mode for a port.
     void setAutoMode(int portId, bool on);
@@ -148,6 +155,8 @@ signals:
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
+    void initializationWarning(const QString& msg);
+    void antennaSelectionRefused(const QString& msg);
     // A socket attempt has begun, from any path; carries the host it asked for.
     void attemptStarted(const QString& host);
 
@@ -195,10 +204,26 @@ private:
     static QMap<QString, QString> parseKeyValues(const QString& text);
     AgPortStatus parsePortStatus(const QString& text) const;
 
-    // Band→antenna memory (persisted in AppSettings XML).
-    void saveBandAntenna(int portId, int bandId, int antennaId);
-    int  recallBandAntenna(int portId, int bandId) const;
-    void onBandChanged(int portId, int oldBand, int oldAnt, int newBand);
+    void loadAntennaSettings();
+    void saveAntennaSettings();
+    QJsonObject bandSettings(int portId, int bandId) const;
+    void setBandSettings(int portId, int bandId, std::optional<int> rx, std::optional<int> tx,
+                         bool clearExisting = false);
+    void clearBandSettings(int portId, int bandId);
+    void saveBandRxAntenna(int portId, int bandId, int antennaId);
+    void saveBandTxAntenna(int portId, int bandId, int antennaId);
+    std::optional<int> recallBandRxAntenna(int portId, int bandId) const;
+    std::optional<int> recallBandTxAntenna(int portId, int bandId) const;
+    void onBandChanged(int portId, int oldBand, int oldRxAnt, int oldTxAnt, int newBand);
+    void selectAntennaPair(int portId, int rxAntenna, int txAntenna,
+                           bool saveRx, bool saveTx, bool clearBandMemory = false);
+    void recallBandAntennas(int portId, int bandId);
+    bool antennaInUseByOtherPort(int portId, int antennaId) const;
+    bool refuseSelectionWhileTransmitting(int portId);
+    AgPortStatus selectionState(int portId) const;
+    void finishInitialPortStatus();
+    void retryInitialStatus();
+    bool hasCompletePortStatus(const QString& line, int portId) const;
 
     // Initialization sequence after TCP connect.
     void runInitSequence();
@@ -212,6 +237,7 @@ private:
     // TCP connection
     QTcpSocket* m_tcpSocket{nullptr};
     std::function<void(const QByteArray&)> m_authCommandWriter;
+    std::function<void(const QByteArray&)> m_commandWriter;
     AgDeviceInfo m_device;
     bool m_connected{false};
     bool m_gotPrologue{false};
@@ -243,6 +269,34 @@ private:
     QList<AgBandInfo>    m_bands;
     AgPortStatus         m_portA;
     AgPortStatus         m_portB;
+    struct PendingSelection {
+        int sequence;
+        quint64 generation;
+        int rxAntenna;
+        int txAntenna;
+        int band;
+        bool saveRx;
+        bool saveTx;
+        bool clearBandMemory;
+        bool acknowledged{false}; // The device answered the command without an error.
+    };
+    std::optional<PendingSelection> m_pendingSelectionA;
+    std::optional<PendingSelection> m_pendingSelectionB;
+    quint64 m_selectionGeneration{0};
+    QJsonObject m_antennaSettings;
+    bool m_antennaSettingsWritable{true};
+    bool m_initializingPorts{false};
+    bool m_initialStatusRequired{false};
+    bool m_initialPortAReady{false};
+    bool m_initialPortBReady{false};
+    bool m_initialAntennasReady{false};
+    // A band recall refused while the port reported tx=1, re-run once tx=0 arrives.
+    bool m_recallDeferredA{false};
+    bool m_recallDeferredB{false};
+    bool m_initializationWarningActive{false};
+    int m_initialStatusRetryCount{0};
+    int m_initialStatusRetryLimit{3};
+    QTimer* m_portInitWatchdog{nullptr};
 
     // Previous band per port (for detecting band changes)
     int m_prevBandA{-1};

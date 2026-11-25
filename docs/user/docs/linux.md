@@ -63,6 +63,30 @@ Most USB accessories are root-only on Linux until a udev rule or group membershi
 
 After changing your groups, log out and back in.
 
+### Serial PTT/CW port won't open
+
+If **Open** in **Settings → Radio Setup... → Serial & Controllers** fails, AetherSDR shows a **Serial Port Open Failed** dialog with the operating system's error and the full device path, for example:
+
+> Permission denied: Can't open /dev/ttyUSB0 (errno 13)
+
+The status next to the buttons stays **Closed** and shows the same error, and **Open** stays available so you can retry. The same dialog appears if **Auto-open serial port on startup** fails.
+
+For a permission error on a device owned by a serial group, the dialog names the group (read from the device, usually `dialout`, or `uucp` on Arch) and the command to run. AetherSDR only shows the commands; it never runs them:
+
+```bash
+sudo usermod -aG dialout "$USER"
+# or, on Debian/Ubuntu:
+sudo adduser "$USER" dialout
+```
+
+Use the group named in the dialog. Then **log out of your desktop session and log back in** (group membership is only read at login), relaunch AetherSDR, and click **Open** again. Run `id` to confirm the group is listed.
+
+Other errors get their own advice instead of group advice:
+
+- **No such file or directory**: the interface is unplugged or was renamed. Plug it in and choose it again from the port list.
+- **Device or resource busy**, or a locking error: another program (another AetherSDR, a logger, a CAT or digital-mode program, ModemManager) has the port open. Close it and click **Open** again.
+- Anything else: inspect the device with `ls -l /dev/ttyUSB0`, `getfacl /dev/ttyUSB0` and `id`.
+
 ## Using AetherSDR on Linux
 
 ### What is different on Linux

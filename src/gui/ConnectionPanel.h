@@ -4,6 +4,8 @@
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "core/IConnectionAutomation.h"
+#include "core/backends/aetherd/RemoteEngineCredentials.h"
+#include "core/backends/aetherd/RemoteEngineDiscovery.h"
 
 #include <QWidget>
 #include <QMargins>
@@ -23,6 +25,8 @@
 #include <QToolButton>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QHash>
+#include <QSet>
 #include <QAbstractSocket>
 #include <functional>
 #include <optional>
@@ -32,6 +36,8 @@ class QScreen;
 class QScrollArea;
 class QSpinBox;
 class QTcpSocket;
+
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -44,7 +50,9 @@ class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
     Q_OBJECT
 
 public:
-    explicit ConnectionPanel(QWidget* parent = nullptr);
+    enum class RemoteDiscovery { Disabled, Enabled };
+    explicit ConnectionPanel(QWidget* parent = nullptr,
+                             RemoteDiscovery remoteDiscovery = RemoteDiscovery::Disabled);
     ~ConnectionPanel() override;
 
     static constexpr int kSafeMinimumWidth = 640;
@@ -95,6 +103,8 @@ public:
     // RTL-SDR USB dongles (RTL2832U / R820T). USB-addressed (device index +
     // serial), not network. Receive-only (Principle VI).
     static constexpr const char* kFamilyRtl  = "rtl";
+    // A remote aetherd engine (docs/aetherd-remote-backend.md); never a manual-IP choice.
+    static constexpr const char* kFamilyAetherd = "aetherd";
 
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
@@ -123,6 +133,8 @@ public:
 
 protected:
     bool event(QEvent* e) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 public slots:
     void onRadioDiscovered(const RadioInfo& radio);
@@ -166,6 +178,7 @@ signals:
     void wanDisconnectClientsRequested(const WanRadioInfo& radio);
     void disconnectRequested();
     void routedRadioFound(const RadioInfo& radio);
+    void remoteEngineRestored(const RadioInfo& radio);
     void retryDiscoveryRequested();
     void radioNicknameChanged();
     void radioRenameRequested(const RadioInfo& radio, const QString& currentNickname);
@@ -388,6 +401,30 @@ private:
     QPushButton* m_localConnectBtn{nullptr};
 
     QList<RadioInfo> m_radios;   // LAN radios only
+
+    // Remote engines (family "aetherd", docs/aetherd-remote-backend.md §3):
+    // pairing with an advertised or typed engine, and its radio-list entry.
+    void buildRemoteEngineSection(QWidget* parent, QVBoxLayout* layout,
+                                  const QString& editStyle, const QString& comboStyle);
+    void onRemoteEngineAdvert(const AetherSDR::aetherd::RemoteEngineDiscovery::Advert& advert);
+    void startRemoteEnginePairing();
+    void offerStartupRemoteEngine();
+    void publishRemoteEngine(const AetherSDR::aetherd::RemoteEngineRecord& record);
+    void forgetRemoteEngine(const QString& engineId);
+    void removeRemoteEngineEntry(const QString& serial);
+    void editRemoteEngineTailnet(const QString& engineId);
+    [[nodiscard]] RadioInfo remoteEngineRadioInfo(const AetherSDR::aetherd::RemoteEngineRecord& record) const;
+    QComboBox* m_remoteEngineAddress{nullptr};
+    QLineEdit* m_remoteEngineCode{nullptr};
+    QPushButton* m_remoteEnginePairBtn{nullptr};
+    QLabel* m_remoteEngineStatus{nullptr};
+    AetherSDR::aetherd::RemoteEngineDiscovery* m_remoteEngineDiscovery{nullptr};
+    QObject* m_remoteEnginePairing{nullptr};   // RemoteEnginePairing; QObject so no-WebSockets builds link
+    QTimer* m_remoteEngineProbeTimer{nullptr};
+    RemoteDiscovery m_remoteDiscovery;
+    QSet<QString> m_remoteEngineRows;
+    quint64 m_remotePairingGeneration{0};
+    QHash<QString, AetherSDR::aetherd::RemoteEngineDiscovery::Advert> m_remoteEngineAdverts;  // by fingerprint
     bool m_connected{false};
 
     // SmartLink UI
@@ -416,6 +453,8 @@ private:
     QWidget*     m_manualIcomPassRow{nullptr};
     QWidget*     m_manualIcomPortRow{nullptr};
     QWidget*     m_manualIcomPortCustomRow{nullptr};
+    QComboBox*   m_ic7110Market{nullptr};
+    QWidget*     m_ic7110MarketRow{nullptr};
     QWidget*     m_manualIcomCivRow{nullptr};
     // The hex entry's own row, shown only for "Custom...". Separate from the
     // combo's row so the two can be hidden independently — the label column is

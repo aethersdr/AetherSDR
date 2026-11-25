@@ -78,6 +78,9 @@ public:
 
     void syncPanProcessingSettings(int avg, int fps, bool weightedAvg);
     void syncWfLineDuration(int rate);
+    // Shows the per-radio "Link display rates across pans" flag (#6799) with
+    // the toggle's signal blocked: MainWindow keeps every pan's panel in step.
+    void syncLinkPanDisplayRates(bool on);
     void syncKiwiWaterfallSettings(int minDbm, int maxDbm, bool autoScale,
                                    int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
@@ -106,9 +109,8 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    // Show/hide the whole WNB row (button + level slider + readout) based on
-    // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
-    void setRadioSideDspAvailable(bool available);
+    // Firmware DSP and panadapter-wide blanking are independent capabilities.
+    void setWnbAvailability(bool hasRadioDsp, bool supported);
     // Whether the connected backend drives its own receive RF gain
     // (IRadioBackend::autoRfGainControl). False HIDES the Auto checkbox beside
     // the RF Gain slider rather than disabling it: on a family with no such
@@ -330,6 +332,8 @@ signals:
     // per pan. MainWindow owns the fan-out (it is the only object that can see
     // the other pans and the radio).
     void displaySettingsCloneRequested();
+    // The operator toggled "Link display rates across pans" (#6799).
+    void linkPanDisplayRatesChanged(bool on);
 
 private:
     QString m_panId;
@@ -557,6 +561,7 @@ private:
     QSlider*     m_floorRangeSlider{nullptr};   // half-dB steps
     QLabel*      m_floorRangeLabel{nullptr};
     QPushButton* m_cloneToAllPansBtn{nullptr};
+    QPushButton* m_linkRatesBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};
     QComboBox*   m_freqScaleFontCmb{nullptr};
@@ -569,6 +574,8 @@ private:
     QPointer<KiwiSdrManager> m_kiwiSdrManager;
     QPointer<SliceModel> m_slice;
     bool         m_updatingFromModel{false};
+    bool         m_antennaComboRefreshPending{false};  // skipped under an open list or a pick
+    bool         m_rxAntennaPickInProgress{false};     // inside the RX ANT combo's station pick
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)
 };
 

@@ -17,6 +17,7 @@
 #include <optional>
 #include <vector>
 
+#include "core/backends/SquelchGate.h"
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
@@ -114,11 +115,10 @@ public:
         // ceiling — 120 dB is the TOP of WDSP's AGC gain range, so leaving it
         // there runs the HL2 wide open and slams the demodulated audio past
         // full scale (measured: peak 3.19, 10% of samples clipping on WWV).
-        // 39 dB is the slice model's default threshold of 65 through the
-        // 0..100 -> 0..60 dB map (see Hl2Backend::setSliceAgc). Measured clean
-        // on live hardware; the previous 65 dB clipped 60% of samples.
+        // 39 dB is the slice model's default threshold of 65 through
+        // Hl2DbReference::agcCeilingDbAtReference(), the 0..100 -> 0..90 dB map.
         int agcMode = 3;
-        double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
+        double maximumAgcGainDb = 39.0;   // = agcCeilingDbAtReference(65), the slice default
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
         // waits for each output block. That does not make a burst feed
@@ -223,6 +223,13 @@ public:
     // old-axis IQ does not ghost across the new axis. Not a transport gap, which
     // keeps the average (see Hl2Spectrum::reset()).
     Q_INVOKABLE void dropSpectrumAverage();
+    // The T/R edge, for the spectrum's DC removal (Hl2Spectrum::setTransmitting).
+    // Held here and re-applied in installChannel(), like the averaging.
+    Q_INVOKABLE void setSpectrumTransmitting(bool on, int releaseHoldMs);
+    // The NCO moved: restart the spectrum's DC estimates (Hl2Spectrum::restartDc).
+    // Separate from dropSpectrumAverage(), which a T/R edge may call too.
+    Q_INVOKABLE void restartSpectrumDc();
+    [[nodiscard]] bool spectrumTransmitting() const noexcept { return m_spectrumTransmitting; }
     // What the installed spectrum is actually running, for tests. DSP thread.
     [[nodiscard]] double spectrumAverageMsApplied() const noexcept
     {
@@ -231,6 +238,16 @@ public:
     [[nodiscard]] bool spectrumLogAverageApplied() const noexcept
     {
         return m_spectrum && m_spectrum->logAverage();
+    }
+    // The installed spectrum's T/R state: keyed (armed, transmitting or
+    // releasing), and whether its transmit DC estimate is the one in use.
+    [[nodiscard]] bool spectrumDcKeyedApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcKeyed();
+    }
+    [[nodiscard]] bool spectrumDcTransmittingApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->dcTransmitting();
     }
 
     // Impulse noise blankers, the HL2's only ones (no firmware DSP), so NB is
@@ -303,8 +320,10 @@ public:
     //
     // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
     // the default level 10 is exactly WDSP's 10 dB channel default, and the
-    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
-    // gain: with AGC off the operator rides RF gain against overload.
+    // slope matches the AGC-T map's 0.6 dB/unit below its 65 knee. Above the
+    // knee AGC-T rises 51/35 dB/unit to 90 dB, while AGC off stays linear to
+    // 64 dB. Not referred to the LNA gain: with AGC off the operator rides RF
+    // gain against overload.
     static constexpr double kAgcFixedGainDbPerUnit = 0.6;
     static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
     static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config
@@ -346,6 +365,47 @@ public:
     {
         return m_apfOn && isCwMode(m_config.mode);
     }
+
+    // The channel's own ANR (leaky LMS NR) and ANF (LMS auto notch), at WDSP's
+    // default pre-AGC position (#5704), so every consumer of this channel's audio
+    // gets them; the client NR modules are a later, separate stage. Held through
+    // modes where they are out of circuit, like the APF: NR is out in FM/WBFM
+    // and DRM, ANF outside voice modes, where a steady tone is the signal.
+    static constexpr int kDefaultNrLevel = 50;       // SliceModel::m_nrLevel
+    static constexpr int kDefaultAnfLevel = 50;      // SliceModel::m_anfLevel
+    [[nodiscard]] static constexpr bool noiseReductionRunsIn(WdspChannel::Mode mode) noexcept
+    {
+        return mode != WdspChannel::Mode::Fm && mode != WdspChannel::Mode::Wbfm
+            && mode != WdspChannel::Mode::Drm;   // ANR would corrupt the DRM waveform
+    }
+    [[nodiscard]] static constexpr bool autoNotchRunsIn(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Lsb || mode == WdspChannel::Mode::Usb
+            || mode == WdspChannel::Mode::Dsb || mode == WdspChannel::Mode::Am
+            || mode == WdspChannel::Mode::Sam;
+    }
+    Q_INVOKABLE void setNoiseReduction(bool on, int level);
+    Q_INVOKABLE void setAutoNotch(bool on, int level);
+    [[nodiscard]] bool noiseReductionRequested() const noexcept { return m_nrOn; }
+    [[nodiscard]] int noiseReductionLevel() const noexcept { return m_nrLevel; }
+    [[nodiscard]] bool noiseReductionInCircuit() const noexcept
+    {
+        return m_nrOn && noiseReductionRunsIn(m_config.mode);
+    }
+    [[nodiscard]] bool autoNotchRequested() const noexcept { return m_anfOn; }
+    [[nodiscard]] int autoNotchLevel() const noexcept { return m_anfLevel; }
+    [[nodiscard]] bool autoNotchInCircuit() const noexcept
+    {
+        return m_anfOn && autoNotchRunsIn(m_config.mode);
+    }
+    // What the channel last ACCEPTED, like m_nbApplied*: whether each stage is
+    // running in WDSP. Differs from *InCircuit() only while WDSP refused a push.
+    [[nodiscard]] bool noiseReductionApplied() const noexcept { return m_nrApplied; }
+    [[nodiscard]] bool autoNotchApplied() const noexcept { return m_anfApplied; }
+    // setNoiseReduction()/setAutoNotch() calls received, for tests: each one
+    // re-sends the stage's values to WDSP, which flushes its LMS taps.
+    [[nodiscard]] int noiseReductionDeliveries() const noexcept { return m_nrDeliveries; }
+    [[nodiscard]] int autoNotchDeliveries() const noexcept { return m_anfDeliveries; }
 
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
     // Hl2AdcPairing.h). WDSP's RXA_ADC_PK in dB re wire full scale, not
@@ -536,6 +596,9 @@ signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
     void meterUpdate(float dbfs);                           // audio-RMS S-meter
+    // The FM squelch gate, on a change only (SquelchGateReporter); Unavailable
+    // when no gate is running or the receiver is muted.
+    void squelchGateChanged(AetherSDR::SquelchGateState state);
     void iqReady(const std::vector<float>& interleavedIq);  // I,Q; see setIqTap
 
 private:
@@ -555,6 +618,8 @@ private:
     // check canPushToChannel() first. Refusals are logged and the request is
     // kept, so the next install re-applies it.
     void applyApf();
+    void applyNoiseReduction();
+    void applyAutoNotch();
     void applyAgcOffLevel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
@@ -600,6 +665,8 @@ private:
     double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
+    // Rate-limits squelchGateChanged; DSP thread only.
+    SquelchGateReporter m_gateReporter;
     WdspChannel::NoiseBlankerFill m_nbFill = WdspChannel::NoiseBlankerFill::Zero;
     std::atomic<WdspChannel::NoiseBlanker> m_nbAppliedKind
         {WdspChannel::NoiseBlanker::Off};
@@ -612,6 +679,15 @@ private:
     bool m_apfOn = false;
     int m_apfLevel = kDefaultApfLevel;
     double m_apfCenterHz = 600.0;
+    // Channel NR and ANF requests, held like the APF; see setNoiseReduction().
+    bool m_nrOn = false;
+    int m_nrLevel = kDefaultNrLevel;
+    bool m_anfOn = false;
+    int m_anfLevel = kDefaultAnfLevel;
+    bool m_nrApplied = false;    // a fresh channel opens with both stages off
+    bool m_anfApplied = false;
+    int m_nrDeliveries = 0;
+    int m_anfDeliveries = 0;
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer
@@ -643,6 +719,7 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
+    bool m_spectrumTransmitting = false;   // see setSpectrumTransmitting()
     // The S-meter tap's gate — the settle window after the channel starts
     // being fed real IQ again, and the read cadence — see the settle note in
     // processIqBlock() and WdspSMeter.h. Armed on the mute's release edge and

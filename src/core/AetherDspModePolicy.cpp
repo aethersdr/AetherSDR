@@ -1,21 +1,21 @@
 #include "AetherDspModePolicy.h"
 
+#include "models/ModeVocabulary.h"
+
 namespace AetherSDR {
 
 bool aetherDspModeRequiresDisable(QStringView mode)
 {
-    // CWU is not a separate mode: AetherSDR's older neutral vocabulary spells
-    // upper-side CW as "CW", and an Icom reports the same mode as "CWU" --
-    // as the HL2 did, until Hl2Backend::setSliceMode began collapsing that
-    // spelling onto "CW" (VoiceModeGate::isCwMode carries the same three
-    // spellings, and
-    // VfoWidget had CWU fall through for the same reason). Omitting it left
-    // every client NR method running through CW on those radios — which for
-    // NNR means a measured 28 dB hole where the signal was, since it treats a
-    // steady carrier as noise.
-    return mode == u"DIGU" || mode == u"DIGL" || mode == u"RTTY"
-        || mode == u"CW" || mode == u"CWU" || mode == u"CWL" || mode == u"CWR"
-        || mode == u"NT";
+    // A slice can be audible before its initial mode arrives. Do not change
+    // the operator's NR selection while that mode is still unknown.
+    if (mode.isEmpty()) {
+        return false;
+    }
+
+    // Automatic speech NR is limited to the shared analog-voice table;
+    // waveform authors can register arbitrary digital mode names, and DFM is
+    // FM data.
+    return !isAnalogVoiceMode(mode);
 }
 
 bool aetherDspMixRequiresDisable(const QList<AetherDspSliceAudioState>& slices)
@@ -44,22 +44,23 @@ AetherDspModePolicy::Action AetherDspModePolicy::update(
         }
     }
 
-    // Keep the remembered method until the queued engine enable is observed.
-    // This also preserves the intended restart state if the app closes in the
-    // short interval between a mode change and the audio-thread callback.
-    if (!restricted && !m_autoDisabledMethod.isEmpty()
-        && enabled == m_autoDisabledMethod) {
+    // Keep the remembered method until a method is observed running in a
+    // compatible mode: the queued restore itself, or a different method a
+    // profile or preset load switched on without a user gesture. While the
+    // queued enable is still in flight nothing is enabled, so the memory also
+    // preserves the intended restart state if the app closes in that interval.
+    if (!restricted && !m_autoDisabledMethod.isEmpty() && !enabled.isEmpty()) {
         m_autoDisabledMethod.clear();
     }
 
-    // Disable an audible method under restriction. Re-disable also fires when
-    // the still-remembered method is the one enabled — a restriction that recurs
-    // after a restore but before the queued enable is observed (rapid mode
-    // churn) would otherwise be skipped and leave the method processing a
-    // CW/digital stream. `!enabled.isEmpty()` already means a method is on, so
-    // there is nothing to re-emit once it is off.
-    if (restricted && !m_userOverride && !enabled.isEmpty()
-        && (m_autoDisabledMethod.isEmpty() || m_autoDisabledMethod == enabled)) {
+    // Disable any audible method under restriction unless the user chose it
+    // there. That covers a restriction that recurs after a restore but before
+    // the queued enable is observed (rapid mode churn), and a different method
+    // a profile or preset load switched on while restricted: either would
+    // otherwise keep processing a CW/digital stream. The method disabled last
+    // is the one remembered. `!enabled.isEmpty()` already means a method is
+    // on, so there is nothing to re-emit once it is off.
+    if (restricted && !m_userOverride && !enabled.isEmpty()) {
         m_autoDisabledMethod = enabled;
         return {ActionKind::Disable, enabled};
     }
@@ -69,11 +70,13 @@ AetherDspModePolicy::Action AetherDspModePolicy::update(
 
 void AetherDspModePolicy::noteUserOverride()
 {
+    // A manual selection owns persistence and the next restriction, even if
+    // the queued automatic restore has not yet been observed in voice mode.
+    m_autoDisabledMethod.clear();
     if (!m_restricted) {
         return;
     }
     m_userOverride = true;
-    m_autoDisabledMethod.clear();
 }
 
 QString AetherDspModePolicy::methodForPersistence(QStringView enabledMethod) const

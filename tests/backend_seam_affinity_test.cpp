@@ -204,7 +204,7 @@ void constructedFamilies()
     RadioModel model;
     const QStringList families = {QStringLiteral("flex"), QStringLiteral("hl2"),
                                   QStringLiteral("anan"), QStringLiteral("icom"),
-                                  QStringLiteral("rtl")};
+                                  QStringLiteral("rtl"), QStringLiteral("aetherd")};
     for (const QString& family : families) {
         std::printf("-- %s: constructed, never connected\n", qPrintable(family));
         if (!model.rebuildBackendForTest(family)) {

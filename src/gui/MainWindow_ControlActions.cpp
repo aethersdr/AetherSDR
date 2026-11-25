@@ -183,7 +183,7 @@ void MainWindow::registerControlActions()
     reg.add(A::level("rf_power", "tx.rfPower", "RF Power", "TX", 0, 100, 5,
         [this](float v) { m_radioModel.transmitModel().setRfPower(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().rfPower(); })
-        .when(canTransmit));
+        .when(canTransmit).transmitDrive());
     reg.add(A::level("mic_level", "phone.micLevel", "Mic Level", "TX", 0, 100, 5,
         [this](float v) { m_radioModel.transmitModel().setMicLevel(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().micLevel(); })
@@ -433,9 +433,7 @@ void MainWindow::registerControlActions()
             // the active slice is not on (Select Panadapter N).
             const QString panId = m_panStack ? m_panStack->activePanId() : QString();
             if (panId.isEmpty() || !m_panStack || m_panStack->count() <= 1) return;
-            clearCenterLockForPan(panId, true);
-            setViewLockForPan(panId, false, /*persist=*/true);
-            m_radioModel.removePanadapter(panId);
+            closePanForgettingCenterLock(panId);
         })
         .inMidiCategory("Global")
         .when([this] { return m_radioModel.isConnected() && m_panStack && m_panStack->count() > 1; }));
@@ -594,10 +592,10 @@ void MainWindow::registerControlActions()
 
     // ── Radio-side receive features ────────────────────────────────────
     // WNB: the panadapter's wideband blanker, offered where the overlay menu
-    // offers it (radio-side DSP).
+    // offers both the toggle and the threshold.
     const auto wnbAvailable = [this] {
         return m_radioModel.isConnected() && m_radioModel.activePanadapter()
-            && m_radioModel.hasRadioSideDsp();
+            && panWnbSupported();
     };
     reg.add(A::toggle("wnb_toggle", "rx.wnbEnable", "WNB", "DSP",
         [this](float v) {

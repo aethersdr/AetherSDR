@@ -48,6 +48,18 @@ your session or keying the radio. It still requires the access token.
 
 You can also start the bridge for a single run by launching with `AETHER_AUTOMATION=1`. In that case the Enabled/Disabled button is grayed out, because the environment variable wins.
 
+### Agent control indicator
+
+When an agent reports its first step, the Orbit badge in the lower-left status
+bar shows its name. Its current step appears beside the Band/Segment Zoom
+controls. A cyan dot beside the sentence gently pulses as the client repaints
+while the step is active and the window is in front. The pulse stops when the
+window is hidden, covered, or minimized. Reduced Motion keeps the dot steady. The activity can use
+up to 64 characters. Hover over Orbit for the full text when the window is narrow.
+Radio notices temporarily take priority. The badge and activity clear when the
+agent finishes, disconnects, or goes five minutes without reporting its step.
+A second agent gets a busy response while the first holds the indicator.
+
 ### Access token
 
 Every verb except `ping` is refused without the matching token. The token is kept in your operating system's secret store (macOS Keychain, Windows Credential Manager, or libsecret/KWallet on Linux), never in the settings database.
@@ -134,6 +146,8 @@ Tick **Observe only** to hand a client visibility without control. The bridge th
 dispatch, not whether a display has appeared or disappeared. Re-poll `get pans`
 to observe the result. Each entry in a close response includes `requested`;
 `closed` is the compatibility name for that request list, not proof of removal.
+A refused entry also names why in `reason`, for example `transmitting` for the
+TX pan while keyed on the Hermes-Lite 2.
 An explicit `pan close all` may request the last pan's removal, but still respects
 backend refusals and display ownership. A normal single-pan close preserves the
 last pan. No pan action enables transmit.

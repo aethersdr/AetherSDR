@@ -160,7 +160,7 @@ applied without a record because `SliceDelta` carries no field for it.
 | Backend | AGC threshold | Noise blanker | Noise reduction | RIT | Pan RF gain |
 |---|---|---|---|---|---|
 | ANAN | every offered mode | every offered mode | every offered mode (WDSP ANR) | ±9999 Hz, every offered mode | −31 to 0 dB, step 1 (the step attenuator, negated) |
-| HL2 | every accepted mode | every accepted mode | not offered: no NR runs in the backend | ±9999 Hz, every accepted mode | −12 to 48 dB, step 1 (the AD9866 LNA) |
+| HL2 | every accepted mode | every accepted mode | every accepted mode but FM, WBFM and DRM (WDSP ANR) | ±9999 Hz, every accepted mode | −12 to 48 dB, step 1 (the AD9866 LNA) |
 | Every other backend | not offered | not offered | not offered | not offered | not offered |
 
 ANAN RIT is a WDSP shift of the detector's zero by the offset: the DDC and
@@ -181,8 +181,11 @@ it is turned on or off or changes kind, when a slice opens or is restored, and
 when each slice is announced on connect. A live level or fill change is not
 echoed: the slice that asked for it already holds it. RF gain is the LNA,
 radio-wide: setting it on one panadapter reports the applied gain, less any
-automatic RF gain offset, to every panadapter. The record also declares the APF in CW and CWL, for the
-desktop only; no headless verb steers it.
+automatic RF gain offset, to every panadapter. HL2 noise reduction is WDSP's
+ANR in the receiver's own channel, as on ANAN, published when it changes (that
+stage alone), on a restore and when each slice is announced on connect. The
+record also declares the APF in CW and CWL and the auto notch (WDSP ANF) in AM,
+SAM, DSB, USB and LSB, for the desktop only; no headless verb steers them.
 
 ANAN mode and filter follow the HL2's contract because both demodulate in the
 same host WDSP: Protocol 2 carries no mode, so the radio adds none. ANAN

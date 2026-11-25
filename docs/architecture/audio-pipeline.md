@@ -59,6 +59,20 @@ interleaved L/R samples. Important cases:
 
 ## RX speaker path
 
+The global AetherDSP mode policy permits automatic NR in USB, LSB, DSB, AM,
+AME, SAM, FM, NFM, FMN, WFM and WBFM: the shared analog-voice table,
+`isAnalogVoiceMode()` in `src/models/ModeVocabulary.h`, which `isVoiceMode()`
+(the voice keyer and Copy Assist gates) also reads. DFM is FM data and is
+restricted. Any receiving, unmuted, positive-gain slice
+with a populated mode outside that list restricts the mixed speaker stream;
+this includes runtime-registered digital waveforms. Empty modes during slice
+creation express no restriction. The policy remembers the selected method
+while automatically disabled and restores it when the mix becomes compatible;
+an explicit user override wins until the restriction clears. A manual method
+selection through a method button, shortcut, controller, AetherNR checkbox or
+RX-chain DSP tile in a compatible mode also replaces any pending automatic-restore
+memory, so the latest selection owns persistence and the next restriction.
+
 ```mermaid
 flowchart TD
     A["Radio VITA RX audio"] --> B["PanadapterStream::processDatagram()"]
@@ -529,7 +543,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
    EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
    ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
-   48 kHz float samples. It is not a boost stage.
+   48 kHz float samples. It is not a boost stage. On a host-modulating radio it
+   stays at 100: the MIC slider sets the modulator's gain there instead
+   (`gui/PcMicGain.h`).
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
    48 kHz after PC mic gain and before the final limiter.
 9. **Final limiter**: `ClientFinalLimiter::process()` runs at 48 kHz after all
@@ -868,7 +884,7 @@ The interlock code distinguishes **PTT source** from **audio route**:
 
 | PTT/audio case | Local preflight behavior | Notes |
 | --- | --- | --- |
-| Local MOX/PTT, PC mic voice path | Blocks `DIGU`/`DIGL` with `You cannot transmit voice in DIGU/DIGL mode.` and checks TX filter overlap before `xmit 1` | This is treated as local voice intent. |
+| Local MOX/PTT | Applies the `DIGU`/`DIGL` voice preflight and checks TX filter overlap before `xmit 1`. On Flex, `TransmitInhibitPolicy::moxKeysRadioDax` exempts MOX from the digital-mode voice preflight. | On Flex, `transmit dax=1` routes the selected DAX TX stream and `transmit dax=0` routes the configured mic input. |
 | Local TUNE/two-tone | Bypasses the `DIGU`/`DIGL` voice warning and local TX-filter-overlap check | The radio can still report frequency or tuner interlocks after tune is requested. |
 | rigctl CAT PTT and TCI `trx` PTT | Bypasses all local PTT preflight | These callers are ACKed before the queued model path runs, so the radio must be authoritative for any resulting interlock. |
 | DAX/TCI audio in `feedDaxTxAudio()` | Bypasses client voice DSP | The audio path alone does not change a local MOX request into a CAT/DAX PTT source. |

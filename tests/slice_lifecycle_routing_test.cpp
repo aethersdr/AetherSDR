@@ -90,6 +90,8 @@ public:
         server.m_routingState.bindCreatedRoute(0, 2);
     }
     static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
+    static qsizetype createdPanCount(const TciServer& server) { return server.m_createdVfoBPans.size(); }
+    static void reap(TciServer& server, int sliceId) { server.reapCreatedVfoBSlice(sliceId); }
 };
 #endif
 }
@@ -121,6 +123,13 @@ public:
     std::vector<bool> duplex;
     std::vector<RadioControlCompletion> duplexReplies;
     int refreshes{0};
+    bool closesPans{false};   // opt-in: answer a pan close as done
+    int panRemoves{0};
+    bool removePanadapter(const QString& panId) override
+    {
+        ++panRemoves;
+        return closesPans || IRadioBackend::removePanadapter(panId);
+    }
     LifecycleProbe()
     {
         caps.maxSlices = 4;
@@ -177,6 +186,23 @@ public:
         if (!accepts || !current()) { return ReceiveDispatch::Unsupported; }
         ++refreshes;
         return ReceiveDispatch::Dispatched;
+    }
+    // A paired receiver/pan backend's native open: its pan and slice are
+    // published before this returns. Reached only with panLifecycleControl set.
+    int panCreates{0};
+    bool createPanadapter() override
+    {
+        ++panCreates;
+        emit panCenterBandwidthChanged(QStringLiteral("capture/two"), 14.25, 0.1);
+        SliceDelta delta;
+        delta.panId = QStringLiteral("capture/two");
+        delta.frequency = 14.25;
+        delta.mode = QStringLiteral("USB");
+        delta.filterLow = 150;
+        delta.filterHigh = 2700;
+        delta.inUse = true;
+        emit sliceChanged(1, delta);
+        return true;
     }
 };
 
@@ -852,6 +878,100 @@ void tciCancellation()
           "TCI discards cleanup receipts when their receiver is authoritatively removed");
 #endif
 }
+
+// VFO B on a backend whose receivers open through the pan lifecycle. Its TX
+// selection is the route's point, so a backend that cannot transmit opens no
+// receiver for it; one that can keeps the route it had.
+void tciVfoBOnPairedReceivers()
+{
+#ifdef HAVE_WEBSOCKETS
+    for (const bool canTransmit : {false, true}) {
+        Fixture f;
+        f.backend->caps.canCreateSlices = false;
+        f.backend->caps.maxSlices = 2;
+        f.backend->caps.maxPanadapters = 2;
+        f.backend->caps.canTransmit = canTransmit;
+        f.backend->caps.panLifecycleControl = PanLifecycleControl{
+            PanLifecycleControl::Creation::Native,
+            {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+        TciServer server(&f.radio);
+        TciClient client;
+        TciSliceLifecycleTestAccess::create(server, client, f.radio.slice(0));
+        settle();
+        if (!canTransmit) {
+            check(f.backend->panCreates == 0 && f.radio.slices().size() == 1
+                      && f.backend->selections.empty(),
+                  "VFO B on a receive-only paired backend opens no receiver: the layout stays");
+            check(!TciSliceLifecycleTestAccess::pending(server)
+                      && !TciSliceLifecycleTestAccess::ownsRoute(server),
+                  "and leaves no route or create behind");
+        } else {
+            check(f.backend->panCreates == 1 && f.radio.slices().size() == 2
+                      && f.backend->selections.size() == 1
+                      && f.backend->selections.front() == std::make_pair(1, true),
+                  "a paired backend that can transmit still opens VFO B's receiver and selects it for TX");
+        }
+    }
+#endif
+}
+}
+
+// #7553: TCI reaps the pan it opened for VFO B. When that pan hosts the TX
+// slice, the radio is keyed and the backend declares the keyed TX-pan close
+// Refused, the pan stays open for the operator, TCI drops its entry and no
+// operator Notice is raised. Unkeyed, the same reap closes the pan.
+void tciKeyedTxPanReap()
+{
+#ifdef HAVE_WEBSOCKETS
+    for (const bool keyed : {true, false}) {
+        Fixture f;
+        f.backend->caps.canCreateSlices = false;
+        f.backend->caps.maxSlices = 2;
+        f.backend->caps.maxPanadapters = 2;
+        f.backend->caps.panLifecycleControl = PanLifecycleControl{
+            PanLifecycleControl::Creation::Native,
+            {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+        f.backend->caps.panLifecycleControl->txPanCloseWhileKeyed =
+            PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
+        f.backend->closesPans = true;
+        TciServer server(&f.radio);
+        TciClient client;
+        TciSliceLifecycleTestAccess::create(server, client, f.radio.slice(0));
+        settle();
+        f.publish(0, false);
+        SliceDelta tx;
+        tx.panId = QStringLiteral("capture/two");
+        tx.txSlice = true;
+        emit f.backend->sliceChanged(1, tx);
+        const SliceModel* vfoB = f.radio.slice(1);
+        const QString txPan = vfoB ? vfoB->panId() : QString();
+        const bool setUp = vfoB && vfoB->isTxSlice() && !txPan.isEmpty()
+            && TciSliceLifecycleTestAccess::createdPanCount(server) == 1;
+        TransmitDelta transmit;
+        transmit.mox = keyed;
+        f.radio.applyBackendTransmitDeltaForTest(transmit);
+        int aboutToRemove = 0;
+        int notices = 0;
+        QObject::connect(&f.radio, &RadioModel::panAboutToRemove, &f.radio, [&](const QString&) { ++aboutToRemove; });
+        QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested, &f.radio,
+                         [&](const QString&, const QString&, const QString&) { ++notices; });
+        TciSliceLifecycleTestAccess::reap(server, 1);
+        if (keyed) {
+            check(setUp && f.radio.panadapter(txPan) && aboutToRemove == 0 && f.backend->panRemoves == 0
+                      && notices == 0 && TciSliceLifecycleTestAccess::createdPanCount(server) == 0,
+                  "a keyed reap of TCI's VFO-B TX pan leaves it open, drops TCI's entry and raises no Notice");
+        } else {
+            check(setUp && aboutToRemove == 1 && f.backend->panRemoves == 1
+                      && TciSliceLifecycleTestAccess::createdPanCount(server) == 0,
+                  "an unkeyed reap of TCI's VFO-B TX pan closes it and drops the entry");
+        }
+        if (!setUp) {
+            std::printf("  setup: vfoB=%d tx=%d pan=%s created=%lld\n", vfoB != nullptr,
+                        vfoB && vfoB->isTxSlice(), qPrintable(txPan),
+                        static_cast<long long>(TciSliceLifecycleTestAccess::createdPanCount(server)));
+        }
+    }
+#endif
 }
 
 int main(int argc, char** argv)
@@ -873,5 +993,7 @@ int main(int argc, char** argv)
     duplexAndRefresh();
     rigctlCorrelation();
     tciCancellation();
+    tciVfoBOnPairedReceivers();
+    tciKeyedTxPanReap();
     return failures == 0 ? 0 : 1;
 }

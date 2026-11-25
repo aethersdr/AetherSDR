@@ -18,14 +18,20 @@ int main()
     // WFM carries intelligible speech (broadcast FM, weather radio, some sat
     // downlinks), so Copy Assist's indicator must offer it (#5301). The IC-705
     // reports the literal "WFM"; the HL2 and ANAN also spell it "WBFM".
-    for (const QString& mode : {QStringLiteral("WFM"), QStringLiteral("WBFM")}) {
+    // DSB, Flex's AME and the RTL-SDR's narrow FM (FMN) read the same shared analog-voice
+    // table as AetherDSP's NR gate, so they are voice here too.
+    for (const QString& mode : {QStringLiteral("WFM"), QStringLiteral("WBFM"),
+                                QStringLiteral("DSB"), QStringLiteral("FMN"),
+                                QStringLiteral("AME")}) {
         if (!isVoiceMode(mode)) { ++failures; }
         if (isCwMode(mode) || isReverseCwMode(mode)) { ++failures; }
     }
     // The non-voice modes stay out: the gate also tears an open Copy Assist
-    // panel down, so admitting a data mode would transcribe modem tones.
+    // panel down, so admitting a data mode would transcribe modem tones. DFM
+    // is FM data (packet, APRS), not voice.
     for (const QString& mode : {QStringLiteral("RTTY"), QStringLiteral("DIGU"),
                                 QStringLiteral("DIGL"), QStringLiteral("DRM"),
+                                QStringLiteral("DFM"),
                                 QStringLiteral("FREEDV"), QStringLiteral("")}) {
         if (isVoiceMode(mode)) { ++failures; }
     }

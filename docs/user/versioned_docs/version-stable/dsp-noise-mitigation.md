@@ -58,6 +58,8 @@ advanced parameters.
 ### NR — Noise Reduction
 General-purpose noise reduction. Adjustable level (0-100). Good starting point for noisy bands.
 
+On the [Hermes-Lite 2](./hermes-lite-2.md) and the [ANAN-G2](./anan-g2.md), NR is WDSP's noise reduction, run on the computer inside the receiver's own channel, so TCI programs and decoders get the processed audio too. On the Hermes-Lite 2, **ANF** runs there as well.
+
 ### ANF — Auto Notch Filter
 Removes a single persistent tone from the passband. Adjustable level (0-100). Best for a dominant interfering carrier.
 
@@ -121,7 +123,7 @@ When you recall a band-stack bookmark, saved WNB values are applied only if the 
 
 ### Where the controls are
 
-All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it with **Settings → AetherRX...** or the **AetherRX** button on the VFO flag's DSP tab. That button lights up whenever a client NR method is running.
+All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it with **Tools → AetherRX...** or the **AetherRX** button on the VFO flag's DSP tab. That button lights up whenever a client NR method is running.
 
 - The **method row** picks one of NR2, NR4, MNR, DFNR, RN2, BNR or NNR; the page below it holds that method's settings. Methods that are not available on your computer or in your build are disabled with a tooltip explaining why.
 - A status strip shows the active method and its key setting.
@@ -132,7 +134,7 @@ All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it w
 ### Rules that apply to all seven
 
 - **One at a time.** Selecting any client method turns off the one that was running. Any client method can be stacked with any radio-side filter.
-- **Voice modes only.** The client methods switch themselves off in CW, CWL, RTTY and DIGU/DIGL, where they would suppress CW tones or corrupt data. Switch back to a voice mode and they become available again. For noise help in CW, use the radio's NR and ANF.
+- **Automatic mode protection.** The client methods run automatically in USB, LSB, DSB, AM, AME, SAM, FM, NFM, FMN, WFM and WBFM (where supported by your radio). An audible slice in any other mode switches the selected method off, including CW, RTTY, DIGU/DIGL, Flex D-STAR (DSTR), FM data (DFM), FreeDV and DRM. The selected method returns when every audible slice is compatible. The method button and status strip show whether it is running. Muted, zero-volume and parked slices do not trigger this rule. Explicitly selecting a method while restricted overrides the automatic rule until the mix becomes compatible again. For noise help in CW, use the radio's NR and ANF.
 - **Stereo.** Each method runs one instance per audio channel, so a hard pan lands instantly and diversity keeps each antenna in its own ear.
 
 ### NR2 — Spectral Noise Reduction
@@ -269,7 +271,7 @@ On non-macOS builds MNR is disabled with an explanatory tooltip.
 
 ### Mode-dependent availability
 
-The seven client-side methods are voice-only: they switch themselves off in CW, CWL, RTTY and DIGU/DIGL. The radio-side filters shown in each mode are:
+The seven client-side methods automatically switch off when an audible slice uses a mode outside the compatible mode list above. This also protects new digital waveform modes. The radio-side filters shown in each mode are:
 
 | Mode | Radio-side filters shown | Hidden |
 |------|-----------|--------|
@@ -284,7 +286,6 @@ The seven client-side methods are voice-only: they switch themselves off in CW, 
 - NR2 can sound scratchy or produce clicks and artifacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
 - NNR's **Premium** model makes receive audio choppy and broken up; the **Standard** model does not ([#5989](https://github.com/aethersdr/AetherSDR/issues/5989)).
 - DFNR can switch itself back on in every profile after you turn it off and save the profile ([#4018](https://github.com/aethersdr/AetherSDR/issues/4018)).
-- The client-side methods stay on in the digital-voice and data modes DSTR, FDV, FDVU and DRM, where they can corrupt the decoder's input ([#5701](https://github.com/aethersdr/AetherSDR/issues/5701)).
 
 ## Troubleshooting
 
@@ -297,9 +298,9 @@ You are listening through the radio's own outputs (line out, headphone jack or f
 
 ### A client-side method turns itself off, or its button is unavailable
 
-The client-side methods are voice-only and switch off in CW, CWL, RTTY and DIGU/DIGL. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
+The client-side methods automatically switch off for audible CW, digital and unrecognized modes. Muting that slice or returning it to a compatible mode restores the selected method. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
 
-1. Switch back to a voice mode to make the methods available again.
+1. Switch back to a compatible mode (listed above) to make the methods available again.
 2. In CW, use the radio's NR and ANF instead.
 3. If the method is disabled in a voice mode, hover over it in the AetherNR method row and read the tooltip. For BNR see [BNR GPU Noise Removal](./bnr-gpu-noise-removal.md); NR4 needs a build with `libspecbleach`; MNR is macOS only.
 

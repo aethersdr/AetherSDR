@@ -356,7 +356,11 @@ void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& ove
 {
     for (const SpectrumWidget::SliceOverlay& overlay : overlays) {
         if (drawsRttyToneCues(overlay.mode)) {
-            dirMap[overlay.sliceId] = VfoWidget::ForceRight;
+            // Runs after the diversity and split passes: a pair lock wins (#7215).
+            const auto locked = dirMap.constFind(overlay.sliceId);
+            const bool isLocked = locked != dirMap.constEnd();
+            dirMap[overlay.sliceId] = VfoWidget::rttyFlagDir(
+                isLocked, isLocked ? *locked : VfoWidget::Auto);
         }
     }
 }
@@ -1061,6 +1065,10 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         static_cast<double>(m_panStats.fftVboBytes) / secs;
     m[QStringLiteral("overlayRebuildsPerSec")] = m_panStats.overlayRebuilds / secs;
     m[QStringLiteral("overlayRebuildMsPerSec")] = msPerSec(m_panStats.overlayRebuildUs);
+    m[QStringLiteral("overlayFrequencyRebuildsPerSec")] =
+        m_panStats.overlayFrequencyRebuilds / secs;
+    m[QStringLiteral("overlayFrequencyRebuildMsPerSec")] =
+        msPerSec(m_panStats.overlayFrequencyRebuildUs);
     m[QStringLiteral("overlayUploadBytesPerSec")] =
         static_cast<double>(m_panStats.overlayUploadBytes) / secs;
     m[QStringLiteral("previewOverlayTransformsPerSec")] =
@@ -2559,7 +2567,7 @@ bool SpectrumWidget::vfoFlagOnLeftForSlice(
             int x = mhzToX(markerMhz);
             if (drawsRttyToneCues(overlay.mode)) {
                 const double hiMhz = markerMhz + overlay.filterHighHz / 1.0e6;
-                x = mhzToX(hiMhz) + 4;
+                x = mhzToX(hiMhz) + VfoWidget::kRttyFlagEdgeGapPx;
             }
             vfos.append({overlay.sliceId, x, widget, overlay.splitPartnerId, &overlay});
         }
@@ -4497,6 +4505,44 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
             applyToSibling(sw);
         }
     }
+}
+
+// Shared body for setSpotMarkersOnPan() and loadSpotMarkersOnPan(). Returns
+// true when the value changed and the caller should proceed with its own
+// post-step (emit or nothing). (#5711)
+bool SpectrumWidget::applySpotMarkersOnPan(bool on)
+{
+    if (m_spotMarkersOnPan == on)
+        return false;
+    m_spotMarkersOnPan = on;
+    if (!on) {
+        // Clear all hover/hit state. The queued tooltip refresh at the bottom
+        // of drawSpotMarkers() reads m_spotClickRects and m_hoveredSpotKey
+        // regardless of the draw gate, so stale state produces tooltips for
+        // labels that are no longer painted.
+        m_hoveredSpotKey.clear();
+        m_lastTooltipRect = {};
+        m_spotClickRects.clear();
+        m_spotClusters.clear();
+    }
+    markOverlayDirty();
+    return true;
+}
+
+void SpectrumWidget::loadSpotMarkersOnPan(bool on)
+{
+    // wirePanDisplayStatus() restore path: applies all side effects but no
+    // signal, so no redundant write is scheduled for the value just read. (#5711)
+    applySpotMarkersOnPan(on);
+}
+
+void SpectrumWidget::setSpotMarkersOnPan(bool on)
+{
+    // Per-pan, NOT propagated to siblings — a multi-band setup where spot
+    // labels are useful on one pan and distracting on another is the expected
+    // case. Persisted via ClientDisplaySettings through MainWindow (#5711).
+    if (applySpotMarkersOnPan(on))
+        emit spotMarkersOnPanChanged(on);
 }
 
 void SpectrumWidget::setShowWsjtxFreq(bool on) {
@@ -6635,6 +6681,38 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
     }
 }
 
+void SpectrumWidget::applyWaterfallViewFrameChange(double oldCenterMhz,
+                                                   double oldBandwidthMhz,
+                                                   double newCenterMhz,
+                                                   double newBandwidthMhz)
+{
+#ifdef AETHER_GPU_SPECTRUM
+    const bool dssMeshReady = m_dssMeshReady;
+#else
+    constexpr bool dssMeshReady = false;
+#endif
+    switch (waterfallViewFrameAction(
+                waterfallRowFramesReady(),
+                m_spectrumRenderMode == SpectrumRenderMode::Mode3D,
+                dssMeshReady, m_wfLive, m_dss.historyRowCount() > 0)) {
+    case WaterfallViewFrameAction::Reproject:
+        handleWaterfallFrequencyFrameChange(oldCenterMhz, oldBandwidthMhz,
+                                            newCenterMhz, newBandwidthMhz);
+        break;
+    case WaterfallViewFrameAction::RebuildDssHistory: {
+        // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
+        // matching comment; newBandwidthMhz is a raw target here.
+        const double effNewBw = panEdgeCropActive()
+            ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+            : newBandwidthMhz;
+        rebuildDssViewportFromHistoryForFrame(newCenterMhz, effNewBw);
+        break;
+    }
+    case WaterfallViewFrameAction::None:
+        break;
+    }
+}
+
 bool SpectrumWidget::frequencyPreviewAvailable() const
 {
 #ifdef AETHER_GPU_SPECTRUM
@@ -6674,7 +6752,7 @@ bool SpectrumWidget::updateFrequencyPreview(double oldCenterMhz,
         // dirty flag is frozen, so use that as the overlay transform base.
         bool overlayDirty = false;
 #ifdef AETHER_GPU_SPECTRUM
-        overlayDirty = m_overlayStaticDirty;
+        overlayDirty = m_overlayStaticDirty || m_overlayFrequencyDirty;
 #endif
         m_frequencyPreviewOverlayBaseCenterMhz = overlayDirty
             ? newCenterMhz : oldCenterMhz;
@@ -6726,27 +6804,8 @@ void SpectrumWidget::commitFrequencyPreview()
     m_frequencyPreviewActive = false;
     QElapsedTimer timer;
     timer.start();
-#ifdef AETHER_GPU_SPECTRUM
-    const bool rowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-        && m_wfFrameTexReady;
-#else
-    constexpr bool rowFrequencyFrames = false;
-#endif
-    if (!rowFrequencyFrames) {
-        handleWaterfallFrequencyFrameChange(baseCenterMhz, baseBandwidthMhz,
-                                            targetCenterMhz, targetBandwidthMhz);
-    } else if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
-        if (!m_wfLive && m_dss.historyRowCount() > 0) {
-            // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
-            // matching comment; this call site is its own raw target, not
-            // inherited from an already-cropped local.
-            const double effTargetBw = panEdgeCropActive()
-                ? targetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
-                : targetBandwidthMhz;
-            rebuildDssViewportFromHistoryForFrame(targetCenterMhz, effTargetBw);
-        }
-    }
+    applyWaterfallViewFrameChange(baseCenterMhz, baseBandwidthMhz,
+                                  targetCenterMhz, targetBandwidthMhz);
     m_frequencyPreviewCommitLastNs = timer.nsecsElapsed();
     m_frequencyPreviewCommitMaxNs = std::max(
         m_frequencyPreviewCommitMaxNs, m_frequencyPreviewCommitLastNs);
@@ -7434,8 +7493,10 @@ void SpectrumWidget::showInterlockNotification(const QString& message,
         || key.startsWith(QStringLiteral("pan-tx-inhibit:"))
         || key.startsWith(QStringLiteral("local-ptt:"))
         || key.startsWith(QStringLiteral("tx-filter:"));
+    // A keyed transmission that did not go out (RadioModel, "tx-failed:N").
+    const bool txFailed = key.startsWith(QStringLiteral("tx-failed:"));
     raiseWarningCard(QStringLiteral("interlock.active"),
-                     txBlock ? tr("Transmit disabled") : tr("Notice"),
+                     txFailed ? tr("TX failed") : txBlock ? tr("Transmit disabled") : tr("Notice"),
                      text, durationMs);
 }
 
@@ -7866,6 +7927,23 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         || !m_kiwiSdrFftTrace.isEmpty();
 }
 
+double SpectrumWidget::panCenterTargetMhz() const
+{
+    const bool animating = m_panCenterAnim
+        && m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    return followReferenceCenterMhz(m_centerMhz, m_panCenterTarget, animating);
+}
+
+bool SpectrumWidget::waterfallRowFramesReady() const
+{
+#ifdef AETHER_GPU_SPECTRUM
+    return m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
+        && m_wfFrameTexReady && m_wfSupplementalGpuTex != nullptr;
+#else
+    return false;
+#endif
+}
+
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
     if (!panGeometryConfirmationRequired()) {
@@ -8112,14 +8190,14 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         m_panCenterStart = m_centerMhz;
     }
 
-    // Scroll waterfall history to align with the new center before the visual
-    // center animation lands. During rapid edge-follow retargets the waterfall
-    // image is already in the previous target's coordinate frame, so reproject
-    // from m_panCenterTarget rather than the mid-animation visual center.
-    handleWaterfallFrequencyFrameChange(waterfallSourceCenterMhz,
-                                        m_bandwidthMhz,
-                                        centerMhz,
-                                        m_bandwidthMhz);
+    // Row-frame pipelines leave the rows alone and follow m_centerMhz as it
+    // animates, in step with the trace and scale. The legacy pipeline stores
+    // view-frame pixels, already in the previous target's frame during rapid
+    // edge-follow retargets, so it reprojects from m_panCenterTarget.
+    applyWaterfallViewFrameChange(waterfallSourceCenterMhz,
+                                  m_bandwidthMhz,
+                                  centerMhz,
+                                  m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 
@@ -8533,13 +8611,18 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
         markOverlayDirty();
     } else {
         auto& o = m_sliceOverlays[idx];
-        if (o.freqMhz == freq && o.filterLowHz == fLow && o.filterHighHz == fHigh &&
-            o.isTxSlice == tx && o.isActive == active && o.mode == mode &&
-            o.rttyMark == rttyMark && o.rttyShift == rttyShift &&
-            o.ritOn == ritOn && o.ritFreq == ritFreq &&
-            o.xitOn == xitOn && o.xitFreq == xitFreq &&
-            o.diversity == diversity && o.diversityParent == diversityParent &&
-            o.diversityChild == diversityChild && o.diversityIndex == diversityIndex)
+        const bool frequencyChanged = o.freqMhz != freq;
+        const bool otherFieldsChanged =
+            o.filterLowHz != fLow || o.filterHighHz != fHigh ||
+            o.isTxSlice != tx || o.isActive != active || o.mode != mode ||
+            o.rttyMark != rttyMark || o.rttyShift != rttyShift ||
+            o.ritOn != ritOn || o.ritFreq != ritFreq ||
+            o.xitOn != xitOn || o.xitFreq != xitFreq ||
+            o.diversity != diversity || o.diversityParent != diversityParent ||
+            o.diversityChild != diversityChild || o.diversityIndex != diversityIndex;
+        const OverlayRepaint repaint = overlayRepaintForSliceChange(
+            frequencyChanged, otherFieldsChanged, cursorReadoutShowing());
+        if (repaint == OverlayRepaint::None)
             return;
         o.freqMhz = freq; o.filterLowHz = fLow; o.filterHighHz = fHigh;
         o.isTxSlice = tx; o.isActive = active;
@@ -8550,7 +8633,11 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
         o.mode = mode; o.rttyMark = rttyMark; o.rttyShift = rttyShift;
         o.ritOn = ritOn; o.ritFreq = ritFreq;
         o.xitOn = xitOn; o.xitFreq = xitFreq;
-        markOverlayDirty();
+        if (repaint == OverlayRepaint::FrequencyLayer) {
+            markFrequencyOverlayDirty();
+        } else {
+            markOverlayDirty("slice");
+        }
     }
 }
 
@@ -8761,7 +8848,13 @@ void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
         if (so.sliceId == sliceId) {
             if (so.freqMhz == freqMhz) return;  // unchanged — no repaint needed
             so.freqMhz = freqMhz;
-            markOverlayDirty();  // repaint so markers reflect the new frequency (#1272)
+            // Repaint so markers reflect the new frequency (#1272).
+            if (overlayRepaintForSliceChange(true, false, cursorReadoutShowing())
+                    == OverlayRepaint::FrequencyLayer) {
+                markFrequencyOverlayDirty();
+            } else {
+                markOverlayDirty("slice");
+            }
             return;
         }
     }
@@ -8806,7 +8899,14 @@ void SpectrumWidget::setSplitPair(int rxSliceId, int txSliceId)
 void SpectrumWidget::setVfoFrequency(double freqMhz)
 {
     auto* o = const_cast<SliceOverlay*>(activeOverlay());
-    if (o) { o->freqMhz = freqMhz; markOverlayDirty(); }
+    if (!o) { return; }
+    o->freqMhz = freqMhz;
+    if (overlayRepaintForSliceChange(true, false, cursorReadoutShowing())
+            == OverlayRepaint::FrequencyLayer) {
+        markFrequencyOverlayDirty();
+    } else {
+        markOverlayDirty("slice");
+    }
 }
 
 void SpectrumWidget::setVfoFilter(int lowHz, int highHz)
@@ -10149,7 +10249,7 @@ bool SpectrumWidget::spectrumDefaultsToCrosshairAt(const QPoint& localPos) const
         return false;
     }
 
-    if (m_showSpots) {
+    if (m_showSpots && m_spotMarkersOnPan) {
         for (const auto& hitRect : m_spotClickRects) {
             if (hitRect.rect.contains(localPos)) {
                 return false;
@@ -10242,7 +10342,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     }
 
     // Click on a spot label → tune to that frequency
-    if (m_showSpots && ev->button() == Qt::LeftButton) {
+    if (m_showSpots && m_spotMarkersOnPan && ev->button() == Qt::LeftButton) {
         const QPoint pos(static_cast<int>(ev->position().x()), y);
         for (const auto& hr : m_spotClickRects) {
             if (hr.rect.contains(pos)) {
@@ -10888,6 +10988,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             wsjtxFreqAction->setCheckable(true);
             wsjtxFreqAction->setChecked(m_showWsjtxFreq);
             connect(wsjtxFreqAction, &QAction::toggled, this, &SpectrumWidget::setShowWsjtxFreq);
+
+            // #5711: per-pan spot marker visibility. Sits beside the WSJT-X
+            // Rx/Tx overlay — both are per-pan display preferences. NOT
+            // propagated to siblings. Gates the entire drawSpotMarkers()
+            // overlay (DX cluster, WSJT-X decoded stations, S-History, QRM).
+            QAction* spotMarkersAction = menu.addAction(tr("Show Spot Markers"));
+            spotMarkersAction->setCheckable(true);
+            spotMarkersAction->setChecked(m_spotMarkersOnPan);
+            connect(spotMarkersAction, &QAction::toggled,
+                    this, &SpectrumWidget::setSpotMarkersOnPan);
 
             QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
             extendedLineAction->setCheckable(true);
@@ -11734,7 +11844,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         foundCursor = true;
                     }
                 }
-                if (!foundCursor && m_showSpots) {
+                if (!foundCursor && m_showSpots && m_spotMarkersOnPan) {
                     bool spotHover = false;
                     for (const auto& hr : m_spotClickRects) {
                         if (hr.rect.contains(pos)) {
@@ -14699,9 +14809,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     const float waterfallTargetBandwidthMhz =
         static_cast<float>(effectiveBandwidthMhz());
     const float waterfallRowFrequencyFrames =
-        m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
-            && m_wfFrameTexReady
-            && m_wfSupplementalGpuTex != nullptr ? 1.0f : 0.0f;
+        waterfallRowFramesReady() ? 1.0f : 0.0f;
     const QRgb wfFloorRgb = waterfallFloorRgb();
     float uniforms[] = {
         rowOffset,
@@ -15023,9 +15131,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
 
             // Cursor frequency label (#726)
-            if (m_showCursorFreq && m_hoveredTnfId < 0
-                && m_cursorPos.x() >= 0
-                && m_cursorPos.y() >= 0) {
+            if (cursorReadoutShowing()) {
                 double freqMhz = xToMhz(m_cursorPos.x());
                 // Snap to the exact VFO frequency when hovering within 8 px of a slice
                 // marker so the readout exactly matches the flag value (#1369).
@@ -15132,8 +15238,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
 
         // Static overlays: only repaint when state changes (markOverlayDirty).
         // Frequency-anchored elements live in their own texture so the preview
-        // shader can move them without also distorting screen-space controls.
-        if (rebuildStaticOverlay) {
+        // shader can move them without also distorting screen-space controls,
+        // and so a slice retune repaints and uploads that layer alone
+        // (markFrequencyOverlayDirty).
+        const bool frequencyLayerOnly = !rebuildStaticOverlay
+            && m_overlayFrequencyDirty && !resizePreview;
+        QElapsedTimer frequencyLayerTimer;
+        if (frequencyLayerOnly)
+            frequencyLayerTimer.start();
+        if (rebuildStaticOverlay || frequencyLayerOnly) {
             m_overlayFrequency.fill(Qt::transparent);
             QPainter frequencyPainter(&m_overlayFrequency);
             frequencyPainter.setRenderHint(QPainter::Antialiasing, false);
@@ -15142,14 +15255,24 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 drawBandPlan(frequencyPainter, specRect);
             }
             drawTnfMarkers(frequencyPainter, specRect, wfRect);
-            if (m_showSpots || m_showSHistory) {
+            if ((m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) {
                 drawSpotMarkers(frequencyPainter, specRect);
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
             drawWsjtxMarkers(frequencyPainter, specRect, wfRect);
             drawOffScreenSlices(frequencyPainter, specRect);
+            frequencyPainter.end();
+            m_overlayFrequencyDirty = false;
+            m_overlayFrequencyNeedsUpload = true;
+        }
+        if (frequencyLayerOnly) {
+            ++m_panStats.overlayFrequencyRebuilds;
+            m_panStats.overlayFrequencyRebuildUs += static_cast<quint64>(
+                frequencyLayerTimer.nsecsElapsed() / 1000);
+        }
 
+        if (rebuildStaticOverlay) {
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
@@ -15178,7 +15301,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_smartMtrLabelsDirty = false;
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
-            m_overlayFrequencyNeedsUpload = true;
             m_frequencyScalePreviewNeedsUpload = false;
         }
 
@@ -16213,7 +16335,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             p, buildDssDepthGeometry(specRect, dssFrameFloorDbm));
     }
     drawTnfMarkers(p, specRect, wfRect);
-    if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
+    if ((m_showSpots || m_showSHistory || m_showSHistoryQrm) && m_spotMarkersOnPan) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
     drawWsjtxMarkers(p, specRect, wfRect);  // CPU path: GPU path adds this in renderGpuFrame()
@@ -16313,9 +16435,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     // ── Cursor frequency label (#456) ──────────────────────────────────────
-    if (m_showCursorFreq && m_hoveredTnfId < 0
-        && m_cursorPos.x() >= 0
-        && m_cursorPos.y() >= 0) {
+    if (cursorReadoutShowing()) {
         double freqMhz = xToMhz(m_cursorPos.x());
         // Snap to the exact VFO frequency when hovering within 8 px of a slice
         // marker so the readout exactly matches the flag value (#1369).
@@ -16406,7 +16526,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
             if (drawsRttyToneCues(so.mode)) {
                 const double hiMhz =
                     so.freqMhz + so.filterHighHz / 1.0e6;
-                x = mhzToX(hiMhz) + 4;
+                x = mhzToX(hiMhz) + VfoWidget::kRttyFlagEdgeGapPx;
             }
             vfos.append({so.sliceId, x, flag, so.splitPartnerId, &so});
         }
@@ -16422,6 +16542,19 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     assignSplitPairDirections(vfos, directionBySlice);
     assignModeForcedDirections(m_sliceOverlays, directionBySlice);
 
+    // An RTTY marker sits at a filter edge, and which edge depends on the
+    // side the flag is drawn: the high edge for a right-side flag, the low
+    // edge for one locked left (#7215). Every other mode keeps its x.
+    const auto anchorX = [this](const VfoPos& vfo, VfoWidget::FlagDir direction) {
+        if (!vfo.overlay || !drawsRttyToneCues(vfo.overlay->mode)) {
+            return vfo.x;
+        }
+        const SliceOverlay& so = *vfo.overlay;
+        return VfoWidget::rttyFlagAnchorX(
+            mhzToX(so.freqMhz + so.filterLowHz / 1.0e6),
+            mhzToX(so.freqMhz + so.filterHighHz / 1.0e6), direction);
+    };
+
     if (vfos.size() == 1) {
         VfoWidget::FlagDir direction =
             directionBySlice.value(vfos[0].sliceId, VfoWidget::Auto);
@@ -16431,7 +16564,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
         }
         vfos[0].w->updatePosition(
-            vfos[0].x, specRect.top() + flagTopPad(), direction);
+            anchorX(vfos[0], direction), specRect.top() + flagTopPad(), direction);
         return;
     }
 
@@ -16444,7 +16577,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 deconflictedVfoFlagDirection(vfos, index, panelW, specW);
         }
         vfos[index].w->updatePosition(
-            vfos[index].x, specRect.top() + flagTopPad(), direction);
+            anchorX(vfos[index], direction), specRect.top() + flagTopPad(), direction);
     }
 }
 
@@ -17857,6 +17990,30 @@ void SpectrumWidget::invalidateSmartMtrLabels()
 #else
     markOverlayDirty("smartMtr", !deferPresentToFft());
 #endif
+}
+
+void SpectrumWidget::markFrequencyOverlayDirty()
+{
+#ifdef AETHER_GPU_SPECTRUM
+    // During a preview the frequency layer is the shader's immutable source;
+    // markOverlayDirty() defers to the commit's full rebuild there.
+    if (m_frequencyPreviewActive) {
+        markOverlayDirty("slice");
+        return;
+    }
+    if (!m_overlayStaticDirty && !m_overlayFrequencyDirty)
+        m_panStats.noteDirty("sliceFreqLayer");
+    m_overlayFrequencyDirty = true;
+    update();
+#else
+    markOverlayDirty("slice");
+#endif
+}
+
+bool SpectrumWidget::cursorReadoutShowing() const
+{
+    return m_showCursorFreq && m_hoveredTnfId < 0
+        && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0;
 }
 
 void SpectrumWidget::drawSmartMtrValueLabels(QPainter& p)

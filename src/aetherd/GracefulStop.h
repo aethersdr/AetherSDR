@@ -10,18 +10,18 @@ namespace AetherSDR::aetherd {
 // radio: ~ModelRadioConnectionTarget calls RadioModel::disconnectFromRadio(),
 // which stops the radio's stream. Killed by a signal instead, aetherd leaves the
 // radio running for a host that is gone: an ANAN reports itself busy for ~8 s,
-// and an HL2 streams at the dead host until power-cycled (Hl2EmergencyStop.h).
+// and an HL2 streams at the dead host until power-cycled (FatalSignalRelease.h).
 //
 // POSIX: the first SIGTERM, SIGINT or SIGHUP wakes the event loop through a
 // self-pipe and the loop quits. A second one, or the grace period running out
-// (a stuck loop is why people reach for kill), fires the HL2 emergency stop and
-// dies by the signal exactly as before. SIGQUIT keeps the GUI's behavior (the
-// HL2 emergency stop, then the default action). An inherited SIG_IGN stays
-// ignored. Windows: a console control event queues the quit and waits for
-// teardown on its own handler thread; if teardown has not finished within the
-// grace period (shorter for close, logoff and shutdown, which Windows itself
-// ends after about 5 s), it fires the HL2 emergency stop and lets the default
-// handler end the process.
+// (a stuck loop is why people reach for kill), fires the registered radio
+// releases (FatalSignalRelease) and dies by the signal exactly as before.
+// SIGQUIT keeps the GUI's behavior (the releases, then the default action). An
+// inherited SIG_IGN stays ignored. Windows: a console control event queues the
+// quit and waits for teardown on its own handler thread; if teardown has not
+// finished within the grace period (shorter for close, logoff and shutdown,
+// which Windows itself ends after about 5 s), it fires the releases and lets
+// the default handler end the process.
 //
 // A stop that arrives before the event loop runs (startup can pump nested
 // loops) cannot quit a loop that has not started: main() checks

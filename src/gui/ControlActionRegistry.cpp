@@ -1,5 +1,7 @@
 #include "ControlActionRegistry.h"
 
+#include "core/ShortcutManager.h"
+
 #include <QRegularExpression>
 #include <algorithm>
 
@@ -114,7 +116,7 @@ void ControlActionRegistry::publishShortcuts(
         case ControlAction::Kind::Trigger:
             reg({a.shortcutId, a.name, a.category, a.defaultKey,
                  [self, act] { if (self->guard(act)) act.set(act.rangeMax); },
-                 a.autoRepeat});
+                 a.autoRepeat, a.txDrive});
             break;
         case ControlAction::Kind::Toggle:
             reg({a.shortcutId, a.name, a.category, a.defaultKey,
@@ -124,7 +126,7 @@ void ControlActionRegistry::publishShortcuts(
                      const float mid = (act.rangeMin + act.rangeMax) / 2.0f;
                      act.set(act.get() > mid ? act.rangeMin : act.rangeMax);
                  },
-                 a.autoRepeat});
+                 a.autoRepeat, a.txDrive});
             break;
         case ControlAction::Kind::Level: {
             const auto step = [self, act](float sign) {
@@ -134,13 +136,23 @@ void ControlActionRegistry::publishShortcuts(
                 act.set(std::clamp(next, act.rangeMin, act.rangeMax));
             };
             reg({upId(a.shortcutId), QStringLiteral("%1 Up").arg(a.name), a.category,
-                 QKeySequence(), [step] { step(1.0f); }, /*autoRepeat=*/true});
+                 QKeySequence(), [step] { step(1.0f); }, /*autoRepeat=*/true, a.txDrive});
             reg({downId(a.shortcutId), QStringLiteral("%1 Down").arg(a.name), a.category,
-                 QKeySequence(), [step] { step(-1.0f); }, /*autoRepeat=*/true});
+                 QKeySequence(), [step] { step(-1.0f); }, /*autoRepeat=*/true, a.txDrive});
             break;
         }
         }
     }
+}
+
+void ControlActionRegistry::publishShortcuts(ShortcutManager& manager) const
+{
+    publishShortcuts([&manager](const ControlActionShortcutSpec& spec) {
+        manager.registerAction(spec.id, spec.name, spec.category, spec.defaultKey,
+                               spec.handler, spec.autoRepeat);
+        if (spec.txDrive)
+            manager.markTxDriveAction(spec.id);
+    });
 }
 
 void ControlActionRegistry::publishMidi(
@@ -204,6 +216,13 @@ QString ControlActionRegistry::shortcutIdForMidi(const QString& midiId) const
             return p.shortcutId;
     }
     return {};
+}
+
+QKeySequence ControlActionRegistry::boundKey(const QString& shortcutId) const
+{
+    if (!m_bindingLookup || !knownShortcutId(shortcutId))
+        return {};
+    return m_bindingLookup(shortcutId);
 }
 
 } // namespace AetherSDR

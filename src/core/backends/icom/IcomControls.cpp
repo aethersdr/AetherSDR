@@ -558,9 +558,74 @@ constexpr std::array kSpecs = {
                 "trip. capabilities().canReboot is false for this reason."},
 };
 
+// Compile-time lookup keeps shared command metadata identical across dialects.
+consteval ControlSpec sharedSpec(std::string_view id)
+{
+    return *std::ranges::find(kSpecs, id, &ControlSpec::id);
+}
+
+constexpr std::array kSelectedBandSpecs{
+    sharedSpec("id"),
+    ControlSpec{"freq", 0x25, 0x00, true, "MAIN selected VFO frequency",
+                Plane::Slice, Encoding::BcdFreq, Wiring::Both, 0, 0, "Hz", 30000, 440000000,
+                "setSliceFrequency", "vfoFreqLabel", true,
+                "The receive ranges are published in the model profile."},
+    ControlSpec{"mode", 0x26, 0x00, true, "MAIN selected VFO mode",
+                Plane::Slice, Encoding::ModeFilter, Wiring::Both, 0, 0, "", 0, 0,
+                "setSliceMode", "vfoModeCombo", true, "Includes DATA and filter slot.", IcomFeature::VfoMode},
+    ControlSpec{"data.mode", 0x26, 0x00, true, "MAIN selected VFO DATA",
+                Plane::Slice, Encoding::Enum, Wiring::Both, 0, 1, "on/off", 0, 1,
+                "setSliceMode", "vfoModeCombo", true, "", IcomFeature::VfoMode},
+    ControlSpec{"filter", 0x26, 0x00, true, "MAIN selected VFO filter",
+                Plane::Slice, Encoding::Enum, Wiring::Both, 1, 3, "slot", 1, 3,
+                "setSliceFilterPreset", "vfoFilterBtn", true, "", IcomFeature::VfoMode},
+    ControlSpec{"receiver.selected", 0x07, 0xD2, true, "Operating band",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly, 0, 1, "band", 0, 1,
+                "", "", true, "00 MAIN, 01 SUB.", IcomFeature::SelectedBandDualwatch},
+    ControlSpec{"receiver.dualwatch", 0x16, 0x59, true, "Dualwatch",
+                Plane::Radio, Encoding::OnOff, Wiring::Both, 0, 1, "on/off", 0, 1,
+                "invokeExtension icom/receiver.dualwatch", "", true, "", IcomFeature::SelectedBandDualwatch},
+    ControlSpec{"ptt", 0x1C, 0x00, true, "Radio PTT readback",
+                Plane::Radio, Encoding::OnOff, Wiring::DecodeOnly, 0, 1, "on/off", 0, 1,
+                "", "", false, "Observes the station transmitter."},
+    ControlSpec{"audio.output", 0x1A, 0x05, true, "Wi-Fi AF/IF output",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly, 0, 1, "enum", 0, 1,
+                "", "", true, "SET item 0122 selects AF (00) or 12 kHz IF (01)."},
+    ControlSpec{"scope.onoff", 0x27, 0x10, true, "Scope on/off",
+                Plane::Pan, Encoding::OnOff, Wiring::Both, 0, 1, "on/off", 0, 1,
+                "", "", true, "Requested and read back at connect.", IcomFeature::Scope},
+    ControlSpec{"scope.output", 0x27, 0x11, true, "Scope data output",
+                Plane::Pan, Encoding::OnOff, Wiring::Both, 0, 1, "on/off", 0, 1,
+                "", "", true, "The waveform subscription is independent of the display.", IcomFeature::Scope},
+    ControlSpec{"scope.source", 0x27, 0x12, true, "Displayed scope source",
+                Plane::Pan, Encoding::Enum, Wiring::Both, 0, 1, "band", 0, 1,
+                "invokeExtension icom/scope.source", "", true, "00 MAIN, 01 SUB.", IcomFeature::Scope},
+    ControlSpec{"scope.single", 0x27, 0x13, true, "Single scope",
+                Plane::Pan, Encoding::Enum, Wiring::DecodeOnly, 0, 0, "", 0, 0,
+                "", "", true, "The radio documents a fixed value of 00.", IcomFeature::Scope},
+    ControlSpec{"scope.mode", 0x27, 0x14, true, "Scope mode",
+                Plane::Pan, Encoding::Enum, Wiring::Both, 0, 3, "", 0, 0,
+                "setPanScopeMode", "", false, "The selector identifies the displayed band.", IcomFeature::Scope},
+    sharedSpec("scope.span"),
+    ControlSpec{"scope.slot", 0x27, 0x16, true, "Displayed edge slot",
+                Plane::Pan, Encoding::Enum, Wiring::Both, 1, 4, "slot", 1, 4,
+                "", "", false, "Fixed and Scroll-F use the radio's edge presets.", IcomFeature::Scope},
+    ControlSpec{"scope.reference", 0x27, 0x19, true, "Shared scope reference level",
+                Plane::Pan, Encoding::Bcd4, Wiring::Both, -20, 20, "dB", -20, 20,
+                "invokeExtension icom/scope.reference", "", false,
+                "A single REF value applies to both source selectors in 0.5 dB increments.", IcomFeature::Scope},
+    sharedSpec("scope.fixededge"),
+};
+
 }  // namespace
 
-std::span<const ControlSpec> controlSpecs() { return kSpecs; }
+std::span<const ControlSpec> controlSpecs(const IcomModelProfile& profile)
+{
+    if (profile.selectedBandDualwatch) {
+        return kSelectedBandSpecs;
+    }
+    return kSpecs;
+}
 
 bool controlSupported(const IcomModel& model, const IcomModelProfile& profile,
                       const ControlSpec& spec) noexcept

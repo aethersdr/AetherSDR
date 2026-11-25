@@ -8,6 +8,7 @@
 // Production backend, no socket: the client is only marked as streaming.
 
 #include "TestSettingsProfile.h"
+#include "core/HostTransmitPolicy.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -148,7 +149,7 @@ int main(int argc, char** argv)
     }
     QCoreApplication app(argc, argv);
     qunsetenv("AETHER_AUTOMATION");
-    hl2::Hl2Backend::setHostOffersTransmit(true);
+    AetherSDR::setHostOffersTransmit(true);
 
     positiveControl();
 

@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). Drive (`transmit rfpower\|tunepower`) never keys and needs no permission; the power ceiling bounds it. |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -152,7 +152,7 @@ contributors to self-verify UI changes before requesting review.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
    manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** (25 typed tools): process handoff — `app_instance`;
+**Typed tools.** Activity reporting — `set_agent_activity`; process handoff — `app_instance`;
 introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
@@ -168,11 +168,34 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `transmit` — gated by
+`atu`, `cwx`, `testtone` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), the non-keying
+`transmit` drive verb (no permission, bounded by the power ceiling) and
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
+
+**Agent activity.** Before driving AetherSDR through MCP or Computer Use, send
+a short phrase such as “Testing meters”. Include what you are checking when it fits. For example, call
+`set_agent_activity({"text":"Reading the meters to check which signal levels are available."})`.
+When the step changes, call
+`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the readback."})`.
+Short labels such as “Testing tuning” also work. Finish with
+`set_agent_activity({"text":""})`. Existing radio notices take priority.
+The wrapper pins the app instance and holds a local connection for the claim.
+On success, `expiresInMs` gives the remaining claim lifetime in milliseconds
+while active. The wrapper releases its pin at expiry or on a failed connection
+to that instance. The next call resolves the currently selected app.
+With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`
+on a connection you keep open. The same connection can replace or clear the
+text. A competing caller receives `busy`. Closing the owner connection,
+stopping the bridge, or five minutes without an explicit owner report clears the
+badge and notice. For a long step, repeat its text before the deadline. Other
+tool calls leave the deadline unchanged. The bridge strips Unicode control and format
+characters, including bidi and zero-width controls, simplifies whitespace, and displays the first 64 Unicode
+code points. Only an explicitly empty string releases the claim. Nonempty input
+that leaves no display text returns an error and preserves the current report.
+Observe-only sessions cannot claim the indicator.
 
 **Prompts and resources.** The server also exposes an MCP **prompt**,
 `validate_ui_change` (the loop below as a guided workflow — pass your
@@ -381,6 +404,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get daxtx`](#get-daxtx) | This client's radio-confirmed DAX TX ownership, audio readiness, pending request, and guard reasons. |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
+| | [`get serial`](#get-serial) | Serial PTT/CW port — observed open state and the last open failure (#6972). |
 | | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
@@ -741,9 +765,16 @@ popup at a time and only while it is open; an empty combo is refused up front
 > was deliberately narrowed from the old `…/tune/atu/vox/…` set: `tune`/`atu`/`vox`
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
-> anyway, so the marker still covers them (#3918). Setpoint
-> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
-> blocked — moving a value setter can't transmit.
+> anyway, so the marker still covers them (#3918). The **drive setpoints**
+> `RF power`, `Tune power` and the TX Band Settings per-band RF/Tune power
+> edits carry a second marker, `markTxSetpoint()`
+> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`). They never key, so
+> TX permission does not gate them (#5851): `invoke`, the pointer verbs and
+> `transmit rfpower|tunepower` set them without it. What bounds drive is the
+> power ceiling, `AETHER_AUTOMATION_TX_MAX_POWER`, below. The same holds for
+> the `rf_power_up` / `rf_power_down` shortcuts, the slider keyboard-lease keys
+> and `tci send` of `drive:` / `tune_drive:`: none needs TX permission. Other
+> setpoints like `VOX level` or `Microphone gain` are not blocked either.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -762,6 +793,22 @@ popup at a time and only while it is open; an empty combo is refused up front
 > ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
 > separate authorized watt ceiling and a fresh calibrated forward-power
 > watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
+>
+> The ceiling holds whenever it is armed, **with TX permission too**, on every
+> `markTxSetpoint()` control (the RF/Tune power sliders and the TX Band Settings
+> per-band RF/Tune power edits), keyed on the marker rather than the name
+> (#5851). Where the bridge knows the target value it clamps (`invoke` `setValue`,
+> `setText`, `editText`, `submit`; `transmit rfpower|tunepower`); `tci send` sends
+> its payload as written, so a `drive:`/`tune_drive:` SET above the ceiling is
+> refused instead. Where it does not know the value it refuses while armed:
+> pointer input on a setpoint, `invoke … wheel`, the `rf_power_up` /
+> `rf_power_down` shortcuts through `shortcut` and `keyevent`, and a `keyevent`
+> lease key (arrows, Page, Home/End) on a focused power slider. These are
+> refused in both directions: `rf_power_down`, Down/Left, PageDown and Home
+> cannot raise drive, but the bridge does not tell steps apart, so a session
+> turns power down under an armed ceiling with `invoke setValue` or `transmit
+> rfpower|tunepower`. Clicking a per-band edit, which only focuses it, is
+> refused while armed for the same reason.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -1091,7 +1138,8 @@ cost a few integer adds per frame.
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
-| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`). One key is not a rebuild: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, so leave it out when summing causes against `overlayRebuilds*` |
+| `overlayFrequencyRebuildsPerSec`, `overlayFrequencyRebuildMsPerSec` | GPU frames that repainted and uploaded only the frequency-anchored layer (slice markers, off-screen indicators) for a slice retune, leaving the background and screen-space layers alone; not counted in `overlayRebuilds*` |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `slice`, `other`). Two keys are not full rebuilds, so leave them out when summing causes against `overlayRebuilds*`: `smartMtrStrip` counts GPU frames that repainted and uploaded only the SmartMTR value-label strip, and `sliceFreqLayer` counts slice retunes that marked only the frequency layer (see `overlayFrequencyRebuilds*`) |
 | `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
 | `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
@@ -1276,7 +1324,14 @@ the engine's reason, publishes no levels, and does not key. A capture that arms
 but returns no audio is reported as a missing receive-audio path, not as a
 quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
 `sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
-and does not key its second leg.
+and does not key its second leg. Its probe uses at most 5% drive and respects both
+the starting drive and the bridge ceiling. The DSP check needs a fresh keyed
+TX:MICPEAK sample. Carrier suppression uses fresh forward watts from the silent
+key. Missing readings are reported as `null`. The lifecycle stage records the
+peak sample amplitude across the output channels during transmit, including
+zero for a continuing stream of digital silence. Icom MONI returns transmitter
+monitor audio. The sideband stage on Icom leaves MONI alone and requests
+verification on a separate receiver.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -1291,7 +1346,7 @@ keyed ones. With bridge TX permission off, every key is refused and counted in
 | `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
 
 `squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
-fades during the search, and when there is no audio with squelch open. Both squelch
+fades during the search, for a peak at the pan floor, and when there is no audio with squelch open. Both squelch
 stages decline while the RX applet's SQL button reads AUTO, because Auto SQL rewrites
 the slice on every pan frame; when the button can't be found, the report says the
 state was not observable. `freqMhz` and `sql=` take `tune`'s validation (finite,
@@ -2558,9 +2613,10 @@ The click is **TX-guarded** like `invoke`, but stricter: the guard walks the
 **whole ancestor chain** of the widget under the point (Qt propagates an
 unaccepted press to parents, so a click on a passive child of a keying control
 must be refused too) and is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
-coordinate click is never a hole around the keying gate. Clicks on the RF/Tune
-power sliders are refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a
-groove click can't be clamped — use `invoke … setValue`, which is). A disabled
+coordinate click is never a hole around the keying gate. Clicks on a TX setpoint
+(`markTxSetpoint()`: the RF/Tune power sliders, the per-band power edits) are
+refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a groove click can't be
+clamped — use `invoke … setValue`, which is). A disabled
 widget under the point is refused (`"disabled":true`), same as `invoke`.
 
 Delivery is deferred one main-loop turn (`"deferred":true`), so any popup/dialog
@@ -2739,6 +2795,13 @@ needs key **release** edges. The bridge replies with a distinct
 truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
 included) need no flag.
 
+Actions that set transmit drive without keying (`setsTxDrive`, declared with
+`transmitDrive()` in the control-action registry: `rf_power_up` and
+`rf_power_down`) need no TX permission (#5851). While
+`AETHER_AUTOMATION_TX_MAX_POWER` is armed they are refused, up and down alike,
+as is a `keyevent` press of their key: a step's size is unknown to the bridge.
+The operator's own keyboard is never gated.
+
 ### `midi`
 Inject one MIDI Control Change value through the same learned VFO Tune Knob
 relative decoder used by physical controllers. This focused automation surface
@@ -2779,6 +2842,21 @@ its waterfall may appear later. Unknown outcomes are not automatically retried.
 Each close entry reports `requested`; the compatibility field `closed` names the
 request list, not confirmed removals. An aggregate `ok:true` means at least one
 close request was dispatched, so inspect every entry after a partial refusal.
+A refused entry also carries `reason`: `transmitting` (the pan hosts the TX
+slice while keyed, on a backend that refuses that close, such as the HL2),
+`not-owned`, `remove-not-supported`, `inventory-uncertain`,
+`not-connected`, `stale-session`, `no-such-pan`, `pan-replaced`, or
+`backend-refused` (declined after the model's up-front checks: by the
+backend, or by the model's own re-check once `panAboutToRemove` has run).
+A single-target close of the last pan is refused for the whole request with
+`refused: cannot close the last panadapter`, not as an entry `reason`.
+
+```json
+→ {"cmd":"pan","action":"close","value":"all"}
+← {"ok":true,"pan":"close","requested":true,
+   "closed":[{"panId":"0x40000000","resolved":true,"requested":true},
+             {"panId":"0x40000001","resolved":true,"requested":false,"reason":"transmitting"}]}
+```
 Every `pan` action is RX/config only; none keys the transmitter.
 
 Floating and docking use the production pan title-bar control rather than a
@@ -3434,6 +3512,34 @@ dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
 `visible=false` throughout.
 
+### `get serial`
+Read the serial PTT/CW port (**Radio Setup → Serial & Controllers**) as the
+controller last reported it — not the saved Open request. Works with no radio
+connected and never keys.
+
+```json
+→ {"cmd":"get","model":"serial"}
+← {"ok":true,"model":"serial","available":true,"open":false,
+   "device":"/dev/ttyUSB0","error":"Permission denied: Can't open /dev/ttyUSB0 (errno 13)",
+   "errorCode":13,"failureKind":1,"group":"dialout","errorDialogVisible":true,
+   "openRequested":false,"autoOpen":false}
+```
+
+Fields: `open` (the port is actually open), `device` (full system path of the
+last open/close), `error` (summary of the last failed open, empty after a
+successful open or a close), `errorCode` (errno, or the Win32 error; 0 when not
+known), `failureKind` (0 none, 1 permission, 2 not found, 3 in use, 4 other),
+`group` (the group whose membership would grant access; set only for a Linux
+permission failure where that is the remedy), `errorDialogVisible` (the "Serial
+Port Open Failed" dialog is showing), `openRequested` (the session's
+`SerialPortOpen` request; a failed open withdraws it), `autoOpen` (the startup
+preference). `available` is false in builds without Qt SerialPort. A trailing
+property narrows it: `get serial open` → `{"value":false}`. To prove the failure
+path without transmitting, select a port the user cannot open (or one that is
+not present), run `invoke serialOpenButton click`, then assert `open=false`,
+`error` non-empty and `errorDialogVisible=true`. Use `serialCloseButton` for
+the serial PTT/CW **Close** control.
+
 ### `get titlebar`
 Read the unified 52 px title bar — the single strip that owns the brand mark,
 the radio tabs, the audio cluster, and the window controls on every platform.
@@ -3622,6 +3728,12 @@ over loopback and offers two profiles after draining the init burst through
 Removes the external-WebSocket dependency for TCI/DAX lifecycle testing.
 Requires the TCI server to be running (toggle via `invoke tciEnable click` if
 needed).
+
+A payload that sets drive (`drive:<trx>,<value>` or `tune_drive:<trx>,<value>`)
+needs no TX permission (#5851). While `AETHER_AUTOMATION_TX_MAX_POWER` is armed,
+a SET above the ceiling (or one whose value cannot be read as `trx,power`) is
+refused; at or below it, it is sent. The read forms (`drive:0;`) stay open.
+External TCI clients are not affected.
 
 ```json
 → {"cmd":"tci","action":"start"}            // optional value = port
@@ -4511,12 +4623,23 @@ opens the receive audio path. Scope size/mode rejection logs under
 `aether.icom.pan` are limited to one warning per five seconds and include
 expected/received waveform counts or the unsupported mode.
 
-MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
-`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
-`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
-of the request is not readback. These commands preserve receiver frequencies,
-editing focus, split and TX routing, are unavailable in observe-only mode, and
-do not enable TX automation. Connection startup reads Dualwatch without setting it.
+On IC-7610, IC-7760 and modern-scope IC-785x, `civ dualwatch on` and
+`civ dualwatch off` request the `07 C2` setting. The IC-7110 uses `16 59`.
+Connection startup reads Dualwatch. After a change, use `civ profile` to
+check the radio-confirmed `dualWatch` boolean (null until known).
+
+On the IC-7110, `civ scopesource main` or `civ scopesource sub` selects the
+single streamed scope with `27 12`. In `civ profile`, `selectedBand` is the
+front-panel control focus, `scopeSource` is the radio-confirmed scope source,
+and `scopeFrameSource` identifies the accepted waveform. These fields use
+`0` for MAIN and `1` for SUB. The single editable slice belongs to MAIN.
+SUB is a scope preview. The app reports a CI-V refusal in the status bar.
+Scope selection and Dualwatch changes require a writable bridge and work
+with TX automation disabled. `scope.enabled` and
+`scope.outputEnabled` report the scope display and waveform-output switches.
+`lanOutput` reports the Wi-Fi output setting from SET 0122. Its values are
+`-1` while unknown, `0` for AF and `1` for IF. Only AF opens the shared
+station monitor.
 
 `civ scopepreset <range> <slot>` requests a preset read; adding `<lower-Hz>
 <upper-Hz>` explicitly writes whole-kHz edges inside that range, up to 1 MHz
@@ -4869,6 +4992,8 @@ Bare-line forms: `modem profile hf300`, `modem on`, `modem digi status`,
 
 These verbs **key the live transmitter** and are refused unless the app was
 launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
+The exception is [`transmit`](#transmit), which sets drive and never keys: it
+needs no TX permission, and the power ceiling bounds it (#5851).
 A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
 automation-originated continuous key that runs too long, and the bridge
 force-unkeys its own active TX lease on stop. Merely enabling TX permission
@@ -4944,18 +5069,18 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `transmit`
 Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
-TX-gated like `key`, and the gate is reported **before** the value is validated so
-it cannot be probed with nonsense.
+Not TX-gated: drive never keys, so it needs no TX permission (#5851). What bounds
+it is the power ceiling.
 
 The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
 ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
-accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+`markTxSetpoint()` marker, so a verb reaching `TransmitModel` directly would otherwise inherit
 no bound at all — on the surface most likely to be feeding a transverter or an
 amplifier. When a request is clamped the reply says so rather than quietly honouring
 a different number than was asked for.
 
 ```json
-→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+→ {"cmd":"transmit","action":"rfpower","value":"25"}
 ← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
 
 → {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
@@ -5134,8 +5259,12 @@ when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
 `3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
 
 Pan creation and removal settle asynchronously. The initial reply includes
-`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
-`settling`. Poll `workspace status` until the active main surface has the
+`layout`, `targetPanCount`, active-main `panCount`, global `globalPanCount`,
+and `settling`. When a smaller layout's close is refused (a keyed TX pan, a pan
+another client owns), the shrink stops there and no earlier pan closes in its
+place. `layout` and `targetPanCount` then describe the layout actually applied
+to the pans that remain, which is also the `PanadapterLayout` that is saved;
+`layout` is the previous layout when nothing closed. Poll `workspace status` until the active main surface has the
 target pan count before asserting its live rectangles. Floating pans and pans
 on extra surfaces are outside that count and remain untouched. To prove the
 rectangles persisted, disable and re-enable canvas mode (or restart with the
@@ -5206,8 +5335,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 
 `droopcal status|start|stop|apply|discard` requires a connected ANAN backend
 with `hostDroopCalibration`. Other families refuse the request before any
-backend call. `start` measures the receiver noise floor across ANAN's six
-DDC0 rates; use an antenna termination as described in Radio Setup → Droop
+backend call. `start` measures RX1's noise floor across ANAN's six DDC
+rates; use an antenna termination as described in Radio Setup → Droop
 Correction. `stop` keeps the partial result, `apply` installs and saves it,
 and `discard` drops the staged measurements.
 
@@ -5244,10 +5373,11 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 83 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 84 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
+| `agentActivity` | — | Report operator-visible activity on a held connection (JSON text, empty to release) |
 | `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
@@ -5288,7 +5418,7 @@ audio devices require separate hardware validation.
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
 | `bandscope` | — | bandscope [status\|on\|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health` |
-| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
+| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
@@ -5311,10 +5441,10 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopesource main\|sub\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
-| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (bounded by the power ceiling) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
