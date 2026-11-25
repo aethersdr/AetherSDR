@@ -142,6 +142,7 @@ public:
     std::vector<int> removes;
     std::vector<std::pair<int, bool>> selections;
     std::vector<RadioControlCompletion> selectionReplies;
+    std::optional<RadioControlReply> selectionReplyInCall;   // opt-in: answer inside the request, as the HL2 does
     std::vector<bool> duplex;
     std::vector<RadioControlCompletion> duplexReplies;
     int refreshes{0};
@@ -196,6 +197,7 @@ public:
         if (!accepts || !current()) { return ReceiveDispatch::Unsupported; }
         selections.emplace_back(id, enabled);
         selectionReplies.push_back(completion);
+        if (selectionReplyInCall) { completion(*selectionReplyInCall); }
         return ReceiveDispatch::Dispatched;
     }
     ReceiveDispatch requestFullDuplex(bool enabled, const RadioControlCompletion& completion,
@@ -1009,7 +1011,7 @@ void tciKeyedTxPanReap()
 enum class KeyedTeardownCase { Owed, OtherRefusal, ReusedDuringOver, DeferredSplitOn,
                                ModelUnkeyedFirst, LostConfirmation, RetryRefusedKeyed,
                                SplitClaimsRetry, SplitSupersedesHeldFalse, VfoKeepsHeldFalse,
-                               RefusedKeyKeepsOwed };
+                               RefusedKeyKeepsOwed, DeferredWaitsForRetry, RefusedInCall };
 void tciKeyedTeardown(KeyedTeardownCase c)
 {
 #ifdef HAVE_WEBSOCKETS
@@ -1151,7 +1153,8 @@ void tciKeyedTeardown(KeyedTeardownCase c)
         before = f.backend->selections.size();
         const int pansBefore = f.backend->panCreates;
         // The radio's close of slice 1 lands after the replay may run, so the
-        // replayed open gets its own receiver id.
+        // replay needs room for a third slice and pan (3/3) and gets its own
+        // receiver id.
         f.backend->caps.maxSlices = 3;
         f.backend->caps.maxPanadapters = 3;
         f.backend->panSliceId = 2;
@@ -1292,6 +1295,49 @@ void tciKeyedTeardown(KeyedTeardownCase c)
               "#7589: a vfo on the kept route does not cancel a held split:false: the route ends, false sent");
         break;
     }
+    case KeyedTeardownCase::DeferredWaitsForRetry: {
+        // A split:true deferred during the over waits while the owed finish
+        // waits on its retry timer: unkeyed, the first finish is refused as
+        // keyed, and the drain that follows must not replay the split first.
+        transmit(true);
+        Access::teardown(server);
+        settle();
+        TciClient other;
+        Access::addClient(server, other);
+        Access::split(server, other, true);
+        settle();
+        before = f.backend->selections.size();
+        const int pansBefore = f.backend->panCreates;
+        transmit(false);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        answer(keyedRefusal);
+        const bool held = f.backend->panCreates == pansBefore && f.backend->selections.size() == before + 1
+            && Access::ownsRoute(server) && Access::routeTx(server) == 1;
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && held && retried && f.backend->panRemoves == 1,
+              "#7589: a deferred split:true is not replayed while the owed finish waits on its retry");
+        break;
+    }
+    case KeyedTeardownCase::RefusedInCall: {
+        // The HL2 refuses a keyed TX move inside requestTxSlice(), before it
+        // returns. With the model already unkeyed that refusal still owes the
+        // finish, and the retry ends the route.
+        f.backend->selectionReplyInCall = keyedRefusal;
+        Access::teardown(server);
+        settle();
+        const bool asked = f.backend->selections.size() == before + 1 && lastSelection(0);
+        const bool owed = Access::ownsRoute(server) && f.backend->panRemoves == 0;
+        f.backend->selectionReplyInCall.reset();
+        const bool retried = waitFor([&] { return f.backend->selections.size() == before + 2; }, 3000)
+            && lastSelection(0);
+        if (retried) { answer(accepted); moveTx(0); settle(); }
+        check(routed && asked && owed && retried && f.backend->panRemoves == 1 && !Access::ownsRoute(server),
+              "#7589: a keyed refusal answered inside the request is owed, and the retry finishes");
+        break;
+    }
     case KeyedTeardownCase::RefusedKeyKeepsOwed: {
         // A trx:true refused in the retry window did not use the kept route:
         // the finish stays owed, and the retry ends the route.
@@ -1346,5 +1392,7 @@ int main(int argc, char** argv)
     tciKeyedTeardown(KeyedTeardownCase::SplitSupersedesHeldFalse);
     tciKeyedTeardown(KeyedTeardownCase::VfoKeepsHeldFalse);
     tciKeyedTeardown(KeyedTeardownCase::RefusedKeyKeepsOwed);
+    tciKeyedTeardown(KeyedTeardownCase::DeferredWaitsForRetry);
+    tciKeyedTeardown(KeyedTeardownCase::RefusedInCall);
     return failures == 0 ? 0 : 1;
 }
