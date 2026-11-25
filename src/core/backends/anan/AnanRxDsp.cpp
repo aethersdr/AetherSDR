@@ -110,6 +110,10 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     // live, and WdspChannel moves the panel gain with the mode (#7252).
     wc.fmLimiter = true;
     wc.fmRxPanelGain = kFmRxPanelGain;
+    // Mono, as Thetis and piHPSDR run it (binaural off): a consumer that
+    // averages L and R gets L's full level, and the Q that ANR zeroes in
+    // AM/SAM is replaced by I.
+    wc.rxPanelMono = true;
     // filterTaps left at WdspChannel::Config's own default (2048): this
     // phase has no manual notch filter, so there is no narrow-notch floor to
     // widen it for (contrast Hl2RxDsp::kRxFilterTaps, which exists solely
