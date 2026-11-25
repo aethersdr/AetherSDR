@@ -6,7 +6,7 @@ description: "AetherSDR is an open-source client for FlexRadio transceivers with
 
 *Native. Open. Yours.*
 
-AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. Supported hardware includes FlexRadio transceivers, the Hermes-Lite 2 in the desktop application, and two Networked Icoms, the IC-705 and IC-7300MK2. See [Supported Radios](./supported-radios.md) for the full list. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
+AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. Supported hardware includes FlexRadio transceivers, the Hermes-Lite 2 in the desktop application, and two Networked Icoms, the IC-705 and IC-7300MK2. Other networked Icom models, the ANAN-G2 and RTL-SDR dongles are supported at an earlier stage, each labeled with its status. See [Supported Radios](./supported-radios.md) for the full list. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
 
 These docs come in two versions, chosen from the version menu at the top of every page. **Stable**, the default, describes the latest release. **Next (main)** tracks `main`: it describes what has landed since that release and will ship in the next one. Release notes for every version are in the [CHANGELOG](https://github.com/aethersdr/AetherSDR/blob/main/CHANGELOG.md).
 

@@ -76,6 +76,14 @@ struct ConnectionPanelSmartLinkTestAccess {
     static QString icomCredentialId(const ConnectionPanel& panel) { return panel.m_activeIcomCredentialId; }
     static bool legacyIcomCredential(const ConnectionPanel& panel) { return panel.m_allowLegacyIcomCredential; }
     static QString wanLabel(const ConnectionPanel& panel, const WanRadioInfo& radio) { return panel.formatWanRadioLabel(radio); }
+    static void connectWan(ConnectionPanel& panel, const WanRadioInfo& radio)
+    {
+        panel.m_wanRadios = {radio};
+        panel.m_wanList->clear();
+        panel.m_wanList->addItem(QStringLiteral("wan"));
+        panel.m_wanList->setCurrentRow(0);
+        panel.onWanConnectClicked();
+    }
 };
 }
 
@@ -723,6 +731,26 @@ int main(int argc, char** argv)
               saved.size() == 1 && connections(other) == otherBefore
               && entry.value("name") == "Cabin Icom" && entry.value("serial") == "icom:192.0.2.42"
               && !entry.value("credentialId").toString().isEmpty());
+
+        // A staged Icom attempt that never reached setConnected(false), then a
+        // SmartLink connect: the WAN session must not commit the Icom path.
+        ConnectionPanel wan;
+        wan.connectTarget(savedTarget);
+        wan.findChild<QLineEdit*>("connectionManualIcomUser")->setText("wan-operator");
+        wan.findChild<QLineEdit*>("connectionManualIcomPassword")->setText("unproven-password");
+        wan.probeRadio("192.0.2.42");
+        const auto wanPath = [&] {
+            const QJsonArray saved = ConnectionWorkspace::find(wan.workspaceSnapshot().value("stations").toArray(),
+                                                               home).value("connections").toArray();
+            return ConnectionWorkspace::find(saved, "frozen-manual");
+        };
+        const QJsonObject beforeWan = wanPath();
+        WanRadioInfo smartLinkRadio;
+        smartLinkRadio.serial = "1234-5678-9012-3456";
+        ConnectionPanelSmartLinkTestAccess::connectWan(wan, smartLinkRadio);
+        wan.setConnected(true);
+        check("a SmartLink connect does not commit a staged Icom attempt's path",
+              !beforeWan.isEmpty() && wanPath() == beforeWan);
         IcomCredentials::clearSession();
     }
     {

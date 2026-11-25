@@ -471,7 +471,7 @@ private:
     QComboBox*   m_manualIcomCivCombo{nullptr};
     QLineEdit*   m_manualIcomCivEdit{nullptr};
     void         populateIcomCivCombo();
-    bool         ic7110Selected() const;
+    bool         ic7110RegionApplies() const;
     void         syncIcomModelRows();
     void         syncIcomPortCustomRow();
     quint16      selectedIcomBasePort() const;

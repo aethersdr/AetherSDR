@@ -115,9 +115,10 @@ supported on its own (both below); FlexRadio remains the primary target:
   IO board's status registers, PureSignal adaptive predistortion, receive
   noise reduction and auto notch, PA current in amps, and receiver IQ for TCI
   clients.
-- **Networked Icoms** — the **IC-705** and **IC-7300MK2** are **Supported**.
-  Add the radio in **File → Connect to Radio...** and select its saved entry
-  to reconnect. AetherSDR uses CI-V and the RS-BA1 protocol directly.
+- **Networked Icoms** — the **IC-705** ([RFC #7595](https://github.com/aethersdr/AetherSDR/issues/7595))
+  and the **IC-7300MK2** ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517))
+  are **Supported**. Add the radio in **File → Connect to Radio...** and select
+  its saved entry to reconnect. AetherSDR uses CI-V and the RS-BA1 protocol directly.
   The connect path asks the radio for its own CI-V address rather than assuming
   one. On the IC-7300MK2 and IC-705, and on the IC-9700, which is not yet
   verified, the panadapter runs in SCROLL-F, tuning in place and scrolling at

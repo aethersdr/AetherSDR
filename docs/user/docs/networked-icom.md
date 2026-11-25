@@ -14,7 +14,7 @@ applies_to: ["Networked Icoms (IC-705 and IC-7300MK2)"]
 
 AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol. No Icom software and no USB cable are needed.
 
-The **IC-705** and **IC-7300MK2** are supported. See [Supported Radios](./supported-radios.md) for the full hardware list.
+The **IC-705** and **IC-7300MK2** are supported and show no EXPERIMENTAL badge. Every other Icom shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. See [Supported Radios](./supported-radios.md) for the full hardware list.
 
 ## Where to go next
 
@@ -28,15 +28,15 @@ The **IC-705** and **IC-7300MK2** are supported. See [Supported Radios](./suppor
 
 ## Models
 
-| Model | Status |
-|-------|--------|
-| **IC-705** | **Supported** |
-| **IC-7300MK2** | **Supported** |
-| **IC-7110** | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
-| **IC-9700** | Early (experimental); works, with read-only memories |
-| **IC-7610, IC-7760** | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
-| **IC-7851** | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
-| IC-905 | Listed in the model chooser, not verified |
+| Model | Network | Status |
+|-------|---------|--------|
+| **IC-705** | Wi-Fi | **Supported** |
+| **IC-7300MK2** | Built-in Ethernet | **Supported** |
+| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
+| **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
+| **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
+| **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
+| IC-905 | Ethernet | Listed in the model chooser, not verified |
 
 The original IC-7300 has no network port and is not in the model list.
 
@@ -66,7 +66,7 @@ Choose **Connect by IP**. After a successful login, the radio appears in your se
 
 ### Wake Icom on connect
 
-**Wake Icom on connect**, near the bottom of the Connect to Radio window, is off by default. When it is on and the radio does not answer identification, AetherSDR wakes a supported model (IC-705, IC-7300MK2 or IC-9700) from standby once. It never puts the radio to sleep on disconnect. The radio's network interface must stay reachable in standby, so a Wi-Fi radio that has dropped off the network cannot be woken. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
+**Wake Icom on connect**, near the bottom of the Connect to Radio window, is off by default. When it is on and the radio does not answer identification, AetherSDR wakes a model with wake support (IC-705, IC-7300MK2 or IC-9700) from standby once. It never puts the radio to sleep on disconnect. The radio's network interface must stay reachable in standby, so a Wi-Fi radio that has dropped off the network cannot be woken. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
 
 ## Using a Networked Icom
 
@@ -146,7 +146,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7110
 
-In **Connect by IP**, select **IC-7110** under **Icom CI-V** to show **IC-7110 region**. Choose the radio’s market and save or connect. AetherSDR remembers the region for that host and port, including when you later use **Auto-detect (recommended)**. The factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
+In **Connect by IP**, the **IC-7110 region** row shows when **Icom CI-V:** is **Auto-detect (recommended)** or **IC-7110**. Set it to the radio's market and save or connect; AetherSDR remembers the region for that host and port. Choosing another model, or **Custom...**, hides the row and keeps the saved region. The factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
 
 | Radio region | Receive tuning in AetherSDR |
 | --- | --- |

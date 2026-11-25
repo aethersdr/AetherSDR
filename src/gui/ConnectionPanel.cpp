@@ -2522,6 +2522,8 @@ void ConnectionPanel::onWanConnectClicked()
         return;
     beginExplicitConnection();
     if (!m_dispatchingTarget) { m_pendingWorkspaceStation.clear(); m_pendingWorkspaceConnection.clear(); }
+    // A staged Icom credential belongs to the attempt it was staged for.
+    clearPendingIcomCredentials();
 
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
     emit wanConnectRequested(m_wanRadios[row]);
@@ -2864,12 +2866,16 @@ void ConnectionPanel::populateIcomCivCombo()
     syncIcomModelRows();
 }
 
-bool ConnectionPanel::ic7110Selected() const
+bool ConnectionPanel::ic7110RegionApplies() const
 {
-    // Model entries carry their factory CI-V address. Auto and Custom carry
-    // sentinels, so a custom bus address cannot be mistaken for a model.
-    return currentManualFamily() == QLatin1String(kFamilyIcom)
-        && m_manualIcomCivCombo->currentData().toString() == QLatin1String("BA");
+    // Auto-detect can land on an IC-7110; an explicit other model or Custom
+    // cannot. Model entries carry their factory CI-V address, and Auto and
+    // Custom carry sentinels, so a custom bus address is never read as a model.
+    if (currentManualFamily() != QLatin1String(kFamilyIcom)) {
+        return false;
+    }
+    const QString civ = m_manualIcomCivCombo->currentData().toString();
+    return civ == QLatin1String("__auto__") || civ == QLatin1String("BA");
 }
 
 void ConnectionPanel::syncIcomModelRows()
@@ -2880,7 +2886,7 @@ void ConnectionPanel::syncIcomModelRows()
     const bool custom =
         m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
     m_manualIcomCivCustomRow->setVisible(icom && custom);
-    m_ic7110MarketRow->setVisible(ic7110Selected());
+    m_ic7110MarketRow->setVisible(ic7110RegionApplies());
 }
 
 void ConnectionPanel::syncIcomPortCustomRow()
@@ -3431,9 +3437,9 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             resolved = hostInfo.addresses().first();
         }
         m_pendingIcomResolvedHost = resolved.toString();
-        // Auto and Custom can reuse an endpoint's saved region. Only an
-        // explicit IC-7110 selection edits it.
-        const bool editRegion = ic7110Selected();
+        // Custom reuses an endpoint's saved region. Auto-detect and an explicit
+        // IC-7110 selection show the region row, so they write what it holds.
+        const bool editRegion = ic7110RegionApplies();
         const QString market = editRegion ? m_ic7110Market->currentData().toString()
                                           : IcomSettings::ic7110Market(trimmedIp, basePort);
         if (editRegion) {
@@ -4840,7 +4846,7 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         bool stale = false;
         const RadioBindSettings bind = currentManualBindSettings(&stale);
         if (stale) { setStatusText(tr("Choose an available source interface before saving.")); return; }
-        if (ic7110Selected()) {
+        if (ic7110RegionApplies()) {
             IcomSettings::setIc7110Market(host, selectedIcomBasePort(), m_ic7110Market->currentData().toString());
         }
         saveManualProfile(host, bind, bind.bindAddress);
