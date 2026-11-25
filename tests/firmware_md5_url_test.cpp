@@ -174,6 +174,18 @@ void checkTheHashFileIsSelectedByReleaseAndArchitecture()
                                            QStringLiteral("4.3.19"), x64)
               == QStringLiteral("https://flexradio.com/") + name,
           "the bare flexradio.com host is accepted");
+    check(FirmwareStager::selectMd5HashUrl(
+              media(QStringLiteral("https://evil.example@edge.flexradio.com/") + name),
+              QStringLiteral("4.3.19"), x64).isEmpty(),
+          "a hash-file URL carrying userinfo is refused");
+    check(FirmwareStager::selectMd5HashUrl(
+              media(QStringLiteral("https://edge.flexradio.com/") + name + QStringLiteral("?v=1")),
+              QStringLiteral("4.3.19"), x64).isEmpty(),
+          "a hash-file URL carrying a query is refused");
+    check(FirmwareStager::selectMd5HashUrl(
+              media(QStringLiteral("https://edge.flexradio.com/") + name + QStringLiteral("#x")),
+              QStringLiteral("4.3.19"), x64).isEmpty(),
+          "a hash-file URL carrying a fragment is refused");
 
     // Ambiguity is no answer.
     const QByteArray twoDifferent = QStringLiteral(R"([{"source_url":"https://edge.flexradio.com/a/%1"},)"
