@@ -391,6 +391,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.takesTxAudioOverSeam = false;
     caps.hasRadioPttReadback = false;
     caps.radioPttObservation = std::nullopt;
+    caps.txSliceControl = std::nullopt;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
     caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists

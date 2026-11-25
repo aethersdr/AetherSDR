@@ -2688,10 +2688,8 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
     OwedRouteFinish owed{rxSlice->sliceId(), createdSliceId, rxSlice,
                          createdSliceId >= 0 ? m_model->slice(createdSliceId) : nullptr,
                          m_model->controlSession(), request.trx, confirmation};
-    if (owed.created && m_model->keyedTxSliceChangeRefused(owed.rxSliceId)) {
-        oweRouteFinish(owed);   // asked first: no refusal Notice for TCI's own move (#7589)
-        return;
-    }
+    // Deferred above while the model reads keyed, so no pre-check here: a
+    // backend still keyed says so in its refusal, and the finish is owed then.
     QPointer<TciServer> self(this);
     const quint64 transitionGeneration = beginRouteTransition();
     promoteTxSliceWithReply(
