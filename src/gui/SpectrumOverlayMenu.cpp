@@ -887,11 +887,13 @@ void SpectrumOverlayMenu::buildAntPanel()
     auto* wnbRow = new QHBoxLayout;
     wnbRow->setSpacing(4);
     m_wnbBtn = new QPushButton("WNB");
+    m_wnbBtn->setObjectName(QStringLiteral("panWnbBtn"));
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
     applyToggleButtonStyle(m_wnbBtn, ToggleTribe::Success);
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
+    m_wnbSlider->setObjectName(QStringLiteral("panWnbLevel"));
     m_wnbSlider->setRange(0, 100);
     m_wnbSlider->setValue(50);
     applyPrimarySliderStyle(m_wnbSlider);
@@ -1034,8 +1036,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_loopABtn->setToolTip("Toggle the LoopA receive loop/preselector path for this panadapter.");
     m_loopBBtn->setToolTip("Toggle the LoopB receive loop/preselector path for this panadapter.");
     m_rfGainSlider->setToolTip("Adjusts receiver IF gain. Lower values reduce strong-signal overload.");
-    m_wnbBtn->setToolTip("Wideband noise blanker \u2014 suppresses correlated impulse noise across the full panadapter bandwidth.");
-    m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
+    setWnbAvailability(true, true);
     m_swrStartBtn->setToolTip("Run a low-power tune sweep across the current TX band and plot SWR on the panadapter.");
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
     m_swrSaveBtn->setToolTip("Export the most recent SWR sweep (frequency + SWR) to a CSV file.");
@@ -3235,13 +3236,16 @@ void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
     applyAutoRfGainToSlider(on);
 }
 
-// WNB is a radio-side noise blanker; on a backend without one the row would
-// control nothing, so button and slider are hidden as a unit.
-void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
+void SpectrumOverlayMenu::setWnbAvailability(bool hasRadioDsp, bool supported)
 {
-    if (m_wnbRow) {
-        m_wnbRow->setVisible(available);
-    }
+    m_wnbRow->setVisible(hasRadioDsp || supported);
+    m_wnbRow->setEnabled(supported);
+    const QString reason = tr("Wideband noise blanker is unavailable on this radio.");
+    m_wnbBtn->setToolTip(supported
+        ? tr("Suppresses correlated impulse noise across the panadapter bandwidth.") : reason);
+    m_wnbSlider->setToolTip(supported
+        ? tr("Adjusts WNB threshold. Higher values blank more aggressively.") : reason);
+    m_wnbRow->setToolTip(supported ? QString() : reason);
 }
 
 void SpectrumOverlayMenu::setNotchesSupported(bool supported)

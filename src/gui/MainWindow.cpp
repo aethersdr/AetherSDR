@@ -8597,6 +8597,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
 }
 
+bool MainWindow::panWnbSupported() const
+{
+    if (!m_radioModel.isConnected()) { return true; }
+    const auto controls = m_radioModel.backendCapabilities().panDisplayControl;
+    return controls && controls->supports(PanDisplayField::Wnb)
+        && controls->supports(PanDisplayField::WnbLevel);
+}
+
 // Takes the WIDGET, not just its menu, because the waterfall auto-black gate has
 // to reach both and they must never disagree about whether HW exists — the menu
 // decides what the button shows, the widget decides what actually renders.
@@ -8608,7 +8616,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
-        menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
+        menu->setWnbAvailability(m_radioModel.hasRadioSideDsp(), panWnbSupported());
         // The Black Level button's HW position, which is a radio-side display
         // computation rather than radio-side audio DSP — so it needs its own
         // capability, not a ride on hasRadioSideDsp. (#4606)
