@@ -126,8 +126,7 @@
     "mask_label_px": 46
   },
   "range": {
-    "multipliers": [1.0, 10.0, 100.0],
-    "label": "RANGE\n20 W ×1\n200 W ×10\n2 kW ×100",
+    "multipliers": [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0],
     "label_center": [1310.0, 120.0]
   },
   "forward_scale": {

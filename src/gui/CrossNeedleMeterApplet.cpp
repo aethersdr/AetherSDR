@@ -233,7 +233,8 @@ void CrossNeedleMeterApplet::showContextMenu(const QPoint& position)
             menu.addAction(QStringLiteral("Test 100 W / 4 W reflected"));
         activeProof->setObjectName(QStringLiteral("crossNeedleActiveProofAction"));
         connect(activeProof, &QAction::triggered, this, [this]() {
-            m_meter->setPowerScale(200, false);
+            // A 100 W radio: its 200 W range is the face's validation proof.
+            m_meter->setPowerScale(100, false);
             m_meter->setAutomationPowerFixture(100.0f, 4.0f);
         });
 

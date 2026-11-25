@@ -603,6 +603,14 @@ QJsonObject describeWidget(const QWidget* w)
             o[QStringLiteral("swr")] = w->property("swr").toDouble();
             o[QStringLiteral("rangeMultiplier")] =
                 w->property("rangeMultiplier").toDouble();
+            o[QStringLiteral("rangeCeilingMultiplier")] =
+                w->property("rangeCeilingMultiplier").toDouble();
+            o[QStringLiteral("rangeForwardFullScaleWatts")] =
+                w->property("rangeForwardFullScaleWatts").toDouble();
+            o[QStringLiteral("rangeReflectedFullScaleWatts")] =
+                w->property("rangeReflectedFullScaleWatts").toDouble();
+            o[QStringLiteral("rangeHoldPending")] =
+                w->property("rangeHoldPending").toBool();
             o[QStringLiteral("rangeLegendVisible")] =
                 w->property("rangeLegendVisible").toBool();
             o[QStringLiteral("transmitting")] =

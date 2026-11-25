@@ -28,8 +28,9 @@ Q_LOGGING_CATEGORY(lcCrossNeedleMeter, "aether.gui.crossneedle")
 namespace {
 
 constexpr double kDesignAspect = 1.5;
-constexpr double kForwardFullScale = 20.0;
-constexpr double kReflectedFullScale = 4.0;
+// Maximum power assumed before the radio reports one: a 100 W radio, whose
+// ceiling is the 200 W range this meter always defaulted to.
+constexpr int kDefaultMaxWatts = 100;
 constexpr MeterSmoother::Ballistics kNeedleBallistics{0.075f, 0.250f, 0.0005f};
 
 class CrossNeedleMeterAccessible : public QAccessibleWidget {
@@ -123,6 +124,15 @@ CrossNeedleMeterWidget::CrossNeedleMeterWidget(QWidget *parent)
     connect(&m_accessibilityTimer, &QTimer::timeout, this,
             &CrossNeedleMeterWidget::publishAccessibleValue);
 
+    m_rangeSelector = CrossNeedleRangeSelector(m_geometry.rangeMultipliers,
+                                               m_geometry.forwardFullScaleWatts(1.0));
+    m_rangeSelector.setCeiling(kDefaultMaxWatts, false);
+    m_rangeMultiplier = m_rangeSelector.multiplier();
+    m_rangeClock.start();
+    m_rangeHoldTimer.setSingleShot(true);
+    connect(&m_rangeHoldTimer, &QTimer::timeout, this,
+            &CrossNeedleMeterWidget::completeRangeHold);
+
     updateTargets(true);
     publishAutomationProperties();
 }
@@ -183,12 +193,15 @@ QString CrossNeedleMeterWidget::accessibleValueText() const {
     if (!m_transmitting && !m_automationFixture) {
         return tr("Receive, forward and reflected needles parked at zero");
     }
-    return tr("Transmit, forward %1 watts, reflected %2 watts, SWR %3, range "
-              "times %4")
+    return tr("Transmit, forward %1 watts, reflected %2 watts, SWR %3, range %4 "
+              "watts forward, %5 watts reflected full scale")
         .arg(m_forwardWatts, 0, 'f', 1)
         .arg(m_reflectedWatts, 0, 'f', 1)
         .arg(m_swr, 0, 'f', 2)
-        .arg(m_rangeMultiplier, 0, 'f', 0);
+        .arg(CrossNeedleMeterGeometry::formatWatts(
+            m_geometry.forwardFullScaleWatts(m_rangeMultiplier)))
+        .arg(CrossNeedleMeterGeometry::formatWatts(
+            m_geometry.reflectedFullScaleWatts(m_rangeMultiplier)));
 }
 
 void CrossNeedleMeterWidget::setTxMeters(float forwardWatts, float swr) {
@@ -200,7 +213,11 @@ void CrossNeedleMeterWidget::setTxMeters(float forwardWatts, float swr) {
     m_swr = std::max(1.0, static_cast<double>(swr));
     m_reflectedWatts = CrossNeedleMeterGeometry::reflectedPowerWatts(m_forwardWatts, m_swr);
     m_reflectedPowerMeasured = false;
-    updateTargets(false);
+    if (observeRange()) {
+        applyRangeChange();
+    } else {
+        updateTargets(false);
+    }
 }
 
 void CrossNeedleMeterWidget::setTxPowers(float forwardWatts, float reflectedWatts) {
@@ -212,7 +229,11 @@ void CrossNeedleMeterWidget::setTxPowers(float forwardWatts, float reflectedWatt
     m_reflectedWatts = std::max(0.0, static_cast<double>(reflectedWatts));
     m_swr = CrossNeedleMeterGeometry::swrFromPowers(m_forwardWatts, m_reflectedWatts);
     m_reflectedPowerMeasured = true;
-    updateTargets(false);
+    if (observeRange()) {
+        applyRangeChange();
+    } else {
+        updateTargets(false);
+    }
 }
 
 void CrossNeedleMeterWidget::setTransmitting(bool transmitting) {
@@ -220,16 +241,58 @@ void CrossNeedleMeterWidget::setTransmitting(bool transmitting) {
         return;
     }
     m_transmitting = transmitting;
+    if (!transmitting) {
+        // Unkey keeps the range for the next over; only the pending
+        // down-range belongs to this one.
+        m_rangeSelector.cancelHold();
+        m_rangeHoldTimer.stop();
+    }
     updateTargets(false);
 }
 
 void CrossNeedleMeterWidget::setPowerScale(int maxWatts, bool amplifierActive) {
-    const double multiplier =
-        CrossNeedleMeterGeometry::rangeMultiplierFor(maxWatts, amplifierActive);
-    if (qFuzzyCompare(multiplier, m_rangeMultiplier)) {
+    if (m_rangeSelector.setCeiling(maxWatts, amplifierActive)) {
+        m_rangeHoldTimer.stop();
+        applyRangeChange();
+    } else {
+        // An unchanged ceiling is re-asserted on every amplifier status poll.
+        publishAutomationProperties();
+    }
+}
+
+bool CrossNeedleMeterWidget::observeRange() {
+    if (!m_transmitting && !m_automationFixture) {
+        // A late meter packet after RX carries no range information.
+        return false;
+    }
+    const bool changed = m_rangeSelector.observe(m_forwardWatts, m_rangeClock.elapsed());
+    scheduleRangeHold();
+    return changed;
+}
+
+void CrossNeedleMeterWidget::scheduleRangeHold() {
+    if (!m_rangeSelector.holdPending()) {
+        m_rangeHoldTimer.stop();
         return;
     }
-    m_rangeMultiplier = multiplier;
+    if (!m_rangeHoldTimer.isActive()) {
+        // +1 ms so the deadline has passed when the timer fires.
+        m_rangeHoldTimer.start(
+            static_cast<int>(m_rangeSelector.holdRemainingMs(m_rangeClock.elapsed())) + 1);
+    }
+}
+
+void CrossNeedleMeterWidget::completeRangeHold() {
+    // Re-present the last sample at the hold deadline: without a fresh one the
+    // selector cannot know the hold has run its full time.
+    if (observeRange()) {
+        applyRangeChange();
+    }
+}
+
+void CrossNeedleMeterWidget::applyRangeChange() {
+    m_rangeMultiplier = m_rangeSelector.multiplier();
+    m_cacheValid = false; // the printed numbers and legend follow the range
     updateTargets(true);
 }
 
@@ -244,7 +307,11 @@ void CrossNeedleMeterWidget::setAutomationFixture(float forwardWatts, float swr)
     m_swr = std::max(1.0, static_cast<double>(swr));
     m_reflectedWatts = CrossNeedleMeterGeometry::reflectedPowerWatts(m_forwardWatts, m_swr);
     m_reflectedPowerMeasured = false;
-    updateTargets(false);
+    if (observeRange()) {
+        applyRangeChange();
+    } else {
+        updateTargets(false);
+    }
 }
 
 void CrossNeedleMeterWidget::setAutomationPowerFixture(float forwardWatts, float reflectedWatts) {
@@ -258,13 +325,19 @@ void CrossNeedleMeterWidget::setAutomationPowerFixture(float forwardWatts, float
     m_reflectedWatts = std::max(0.0, static_cast<double>(reflectedWatts));
     m_swr = CrossNeedleMeterGeometry::swrFromPowers(m_forwardWatts, m_reflectedWatts);
     m_reflectedPowerMeasured = true;
-    updateTargets(false);
+    if (observeRange()) {
+        applyRangeChange();
+    } else {
+        updateTargets(false);
+    }
 }
 
 void CrossNeedleMeterWidget::clearAutomationFixture() {
     if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
         return;
     }
+    m_rangeSelector.cancelHold();
+    m_rangeHoldTimer.stop();
     m_automationFixture = false;
     m_transmitting = false;
     m_forwardWatts = 0.0;
@@ -279,15 +352,16 @@ void CrossNeedleMeterWidget::updateTargets(bool snap) {
     // arrive on independent worker threads, so a late power packet after RX
     // must update the cache without bringing the needles back off their stops.
     const bool active = m_transmitting || m_automationFixture;
-    const double multiplier = std::max(1.0, m_rangeMultiplier);
+    const double forwardFullScale = m_geometry.forwardFullScaleWatts(m_rangeMultiplier);
+    const double reflectedFullScale = m_geometry.reflectedFullScaleWatts(m_rangeMultiplier);
     const float forwardTarget =
-        active ? static_cast<float>(
-                     std::clamp(m_forwardWatts / (kForwardFullScale * multiplier), 0.0, 1.0))
-               : 0.0f;
+        active && forwardFullScale > 0.0
+            ? static_cast<float>(std::clamp(m_forwardWatts / forwardFullScale, 0.0, 1.0))
+            : 0.0f;
     const float reflectedTarget =
-        active ? static_cast<float>(
-                     std::clamp(m_reflectedWatts / (kReflectedFullScale * multiplier), 0.0, 1.0))
-               : 0.0f;
+        active && reflectedFullScale > 0.0
+            ? static_cast<float>(std::clamp(m_reflectedWatts / reflectedFullScale, 0.0, 1.0))
+            : 0.0f;
 
     m_forwardSmoother.setTarget(forwardTarget);
     m_reflectedSmoother.setTarget(reflectedTarget);
@@ -418,23 +492,28 @@ void CrossNeedleMeterWidget::drawScale(QPainter &painter,
         }
     }
 
-    QFont numberFont = font();
-    numberFont.setPixelSize(m_geometry.typography.scaleNumberPixels);
-    numberFont.setWeight(QFont::Medium);
-    painter.setFont(numberFont);
     painter.setPen(QPen(colors.majorTick, style.majorTickWidth, Qt::SolidLine, Qt::SquareCap));
     for (int i = 0; i < scale.anglesRadians.size(); ++i) {
         const double angle = CrossNeedleMeterGeometry::printedAngleForIndex(scale, i);
         const QPointF radial(std::cos(angle), std::sin(angle));
         const QPointF point = scale.center + radial * scale.radius;
         painter.drawLine(point - radial * 20.0, point + radial * 14.0);
-        if (!scale.labels[i].isEmpty()) {
-            painter.save();
-            painter.setPen(colors.text);
-            drawCenteredText(painter, point + radial * scale.labelOffset, scale.labels[i]);
-            painter.restore();
-        }
     }
+
+    // The face prints the active range's watts (#6433); the geometry decides
+    // which numbers fit and at what size.
+    QFont numberFont = font();
+    numberFont.setWeight(QFont::Medium);
+    const CrossNeedleMeterGeometry::ScaleNumberLayout numbers =
+        m_geometry.scaleNumberLayout(scale, m_rangeMultiplier, numberFont);
+    numberFont.setPixelSize(numbers.pixelSize);
+    painter.save();
+    painter.setFont(numberFont);
+    painter.setPen(colors.text);
+    for (const CrossNeedleMeterGeometry::ScaleNumber &number : numbers.numbers) {
+        drawCenteredText(painter, number.center, number.text);
+    }
+    painter.restore();
 
     QFont titleFont = font();
     titleFont.setPixelSize(m_geometry.typography.sideTitlePixels);
@@ -562,7 +641,7 @@ void CrossNeedleMeterWidget::drawFace(QPainter &painter) const {
         painter.setFont(rangeFont);
         painter.setPen(colors.secondaryText);
         drawCenteredMultilineText(painter, m_geometry.rangeLabelCenter,
-                                  m_geometry.rangeLabel);
+                                  m_geometry.rangeLegendText(m_rangeMultiplier));
     }
 
     QFont unitFont = font();
@@ -625,9 +704,10 @@ void CrossNeedleMeterWidget::rebuildStaticLayer() {
 }
 
 void CrossNeedleMeterWidget::drawNeedles(QPainter &painter) const {
-    const double forwardDisplay = m_forwardSmoother.value() * kForwardFullScale * m_rangeMultiplier;
+    const double forwardDisplay =
+        m_forwardSmoother.value() * m_geometry.forwardFullScaleWatts(m_rangeMultiplier);
     const double reflectedDisplay =
-        m_reflectedSmoother.value() * kReflectedFullScale * m_rangeMultiplier;
+        m_reflectedSmoother.value() * m_geometry.reflectedFullScaleWatts(m_rangeMultiplier);
     const QPointF forwardTip = m_geometry.forwardTip(forwardDisplay, m_rangeMultiplier);
     const QPointF reflectedTip = m_geometry.reflectedTip(reflectedDisplay, m_rangeMultiplier);
 
@@ -750,9 +830,9 @@ void CrossNeedleMeterWidget::publishAutomationProperties() {
     double guideDistance = 0.0;
     const QString guide = m_geometry.nearestGuideLabel(intersection, &guideDistance);
     const double displayedForwardWatts =
-        m_forwardSmoother.value() * kForwardFullScale * m_rangeMultiplier;
+        m_forwardSmoother.value() * m_geometry.forwardFullScaleWatts(m_rangeMultiplier);
     const double displayedReflectedWatts =
-        m_reflectedSmoother.value() * kReflectedFullScale * m_rangeMultiplier;
+        m_reflectedSmoother.value() * m_geometry.reflectedFullScaleWatts(m_rangeMultiplier);
 
     setProperty("meterStyle", QStringLiteral("cross-needle"));
     setProperty("faceTheme", faceThemeId());
@@ -763,6 +843,12 @@ void CrossNeedleMeterWidget::publishAutomationProperties() {
                 m_reflectedPowerMeasured ? QStringLiteral("measured") : QStringLiteral("derived"));
     setProperty("swr", m_swr);
     setProperty("rangeMultiplier", m_rangeMultiplier);
+    setProperty("rangeCeilingMultiplier", m_rangeSelector.ceilingMultiplier());
+    setProperty("rangeForwardFullScaleWatts",
+                m_geometry.forwardFullScaleWatts(m_rangeMultiplier));
+    setProperty("rangeReflectedFullScaleWatts",
+                m_geometry.reflectedFullScaleWatts(m_rangeMultiplier));
+    setProperty("rangeHoldPending", m_rangeSelector.holdPending());
     setProperty("rangeLegendVisible", m_rangeLegendVisible);
     setProperty("transmitting", m_transmitting);
     setProperty("effectiveActive", m_transmitting || m_automationFixture);

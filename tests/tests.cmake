@@ -6799,6 +6799,7 @@ add_executable(cross_needle_meter_test
     src/gui/AnalogMeterFaceTheme.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
+    src/gui/CrossNeedleRangeSelector.cpp
     $<TARGET_OBJECTS:aether_test_resources>
 )
 target_include_directories(cross_needle_meter_test PRIVATE src)

@@ -4,6 +4,7 @@
 #include "TestSettingsProfile.h"
 #include "gui/CrossNeedleMeterGeometry.h"
 #include "gui/CrossNeedleMeterWidget.h"
+#include "gui/CrossNeedleRangeSelector.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -482,9 +483,17 @@ void testResourceAndConstruction() {
                 geometry.canvasWidth, 0.001) &&
                geometry.forwardTitle.center.x() <= 145.0 &&
                geometry.reflectedTitle.center.x() >= 1355.0);
-    report("range legend uses four short top-right lines",
-           geometry.rangeLabel.count(QLatin1Char('\n')) == 3 &&
+    report("range legend names the active range's forward and reflected full scale",
+           geometry.rangeLegendText(1.0) == QStringLiteral("RANGE\n20 W\n4 W") &&
+               geometry.rangeLegendText(10.0) == QStringLiteral("RANGE\n200 W\n40 W") &&
+               geometry.rangeLegendText(50.0) == QStringLiteral("RANGE\n1 kW\n200 W") &&
+               geometry.rangeLegendText(100.0) == QStringLiteral("RANGE\n2 kW\n400 W") &&
                geometry.rangeLabelCenter.x() >= 1300.0 && geometry.rangeLabelCenter.y() <= 125.0);
+    report("range ladder is 1-2-5 from 20 W to 2 kW forward full scale",
+           geometry.rangeMultipliers ==
+               QVector<double>({1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0}) &&
+               near(geometry.forwardFullScaleWatts(1.0), 20.0, 1e-9) &&
+               near(geometry.reflectedFullScaleWatts(1.0), 4.0, 1e-9));
     report("face typography retains enlarged readable design sizes",
            geometry.typography.scaleNumberPixels >= 42 &&
                geometry.typography.sideTitlePixels >= 50 &&
@@ -1026,12 +1035,6 @@ void testMeterMathAndActiveProof() {
     report("full reflection reports infinite SWR",
            std::isinf(CrossNeedleMeterGeometry::swrFromPowers(100.0, 100.0)));
 
-    report("20 W hardware selects x1 range",
-           CrossNeedleMeterGeometry::rangeMultiplierFor(20, false) == 1.0);
-    report("100 W radio selects x10 range",
-           CrossNeedleMeterGeometry::rangeMultiplierFor(100, false) == 10.0);
-    report("amplifier output selects x100 range",
-           CrossNeedleMeterGeometry::rangeMultiplierFor(100, true) == 100.0);
 
     const QPointF documentedIntersection = geometry.needleIntersection(10.0, 0.4, 1.0);
     const QPointF multipliedIntersection = geometry.needleIntersection(100.0, 4.0, 10.0);
@@ -1131,7 +1134,7 @@ void testMeterMathAndActiveProof() {
                 everyGuideReconstructsSWR = everyGuideReconstructsSWR && error <= 1e-9;
             }
 
-            for (const double multiplier : {10.0, 100.0}) {
+            for (const double multiplier : geometry.rangeMultipliers) {
                 const QPointF multiplied = geometry.needleIntersection(
                     forwardPower * multiplier, reflectedPower * multiplier, multiplier);
                 const double error =
@@ -1147,7 +1150,7 @@ void testMeterMathAndActiveProof() {
     report("every printed guide reconstructs its declared SWR",
            everyGuideReconstructsSWR,
            "maximum_swr_error=" + std::to_string(maximumSWRerror));
-    report("SWR contours are invariant across x1, x10, and x100 ranges",
+    report("SWR contours are invariant across every range on the ladder",
            rangeInvariant,
            "maximum_position_error_px=" + std::to_string(maximumRangeError));
 }
@@ -1189,7 +1192,7 @@ void testWidgetStateAndRender() {
            differingPixels(rangeVisible, rangeRestored) == 0);
     const QImage swrInkBaseline = renderWidget(meter);
 
-    meter.setPowerScale(200, false);
+    meter.setPowerScale(100, false);
     meter.setTransmitting(true);
     meter.setTxMeters(100.0f, 1.5f);
     report("widget retains calculated reflected-power fallback",
@@ -1487,6 +1490,314 @@ void testWidgetStateAndRender() {
 
 } // namespace
 
+// #6433: the range switch policy, driven with explicit timestamps.
+void testRangeSelector() {
+    using Selector = CrossNeedleRangeSelector;
+    constexpr qint64 kHold = Selector::kDownRangeHoldMs;
+
+    Selector ceilings;
+    report("range ceiling: 100 W radio keeps its rated power off the end stop (200 W)",
+           ceilings.setCeiling(100, false) && ceilings.multiplier() == 10.0 &&
+               ceilings.ceilingMultiplier() == 10.0);
+    report("range ceiling: 500 W radio tops out at 1 kW",
+           ceilings.setCeiling(500, false) && ceilings.multiplier() == 50.0);
+    report("range ceiling: 20 W radio tops out at 40 W",
+           ceilings.setCeiling(20, false) && ceilings.multiplier() == 2.0);
+    report("range ceiling: an active amplifier opens the 2 kW range",
+           ceilings.setCeiling(100, true) && ceilings.multiplier() == 100.0);
+    report("range ceiling: power beyond the ladder stays on the top range",
+           !ceilings.setCeiling(5000, false) && ceilings.multiplier() == 100.0);
+
+    Selector s;
+    s.setCeiling(100, false);
+    report("rated power on a steady carrier holds the 200 W range",
+           !s.observe(100.0, 0) && !s.observe(100.0, 10 * kHold) && s.multiplier() == 10.0 &&
+               !s.holdPending());
+
+    bool earlyChange = false;
+    for (qint64 t = 0; t < kHold; t += 100) {
+        earlyChange = earlyChange || s.observe(30.0, 20 * kHold + t);
+    }
+    const bool dueChange = s.observe(30.0, 20 * kHold + kHold);
+    report("down-range waits the full hold, then lands on the range that fits (30 W -> 40 W)",
+           !earlyChange && dueChange && s.multiplier() == 2.0);
+
+    report("up-range is immediate once forward passes 95% of full scale",
+           s.observe(39.0, 100 * kHold) && s.multiplier() == 5.0);
+    report("a carrier between the up and down thresholds does not hunt",
+           !s.observe(37.0, 200 * kHold) && !s.observe(37.0, 210 * kHold) &&
+               s.multiplier() == 5.0 && !s.holdPending());
+
+    Selector reset;
+    reset.setCeiling(100, false);
+    reset.observe(30.0, 0);
+    reset.observe(150.0, kHold / 3); // needs the 200 W range: the hold is void
+    reset.observe(30.0, kHold * 2 / 3);
+    const bool staleHold = reset.observe(30.0, kHold + kHold / 2);
+    const bool restartedHold = reset.observe(30.0, kHold * 2 / 3 + kHold);
+    report("a sample needing the current range restarts the down-range hold",
+           !staleHold && restartedHold && reset.multiplier() == 2.0);
+
+    Selector largest;
+    largest.setCeiling(100, false);
+    largest.observe(10.0, 0);
+    largest.observe(30.0, kHold / 2);
+    report("a hold lands on the range its largest sample fits, not its smallest",
+           largest.observe(10.0, kHold) && largest.multiplier() == 2.0);
+
+    Selector floor;
+    floor.setCeiling(100, false);
+    bool floorChanged = false;
+    for (qint64 t = 0; t <= 5 * kHold; t += 100) {
+        floorChanged = floorChanged || floor.observe(0.2, t);
+    }
+    report("samples below the signal floor (SSB pauses, CW gaps) never down-range",
+           !floorChanged && floor.multiplier() == 10.0 && !floor.holdPending());
+
+    Selector pinned;
+    pinned.setCeiling(100, false);
+    report("power above the ceiling pins the needle rather than leaving the radio's range",
+           !pinned.observe(500.0, 0) && pinned.multiplier() == 10.0);
+
+    Selector poll;
+    poll.setCeiling(100, false);
+    poll.observe(30.0, 0);
+    report("re-asserting an unchanged ceiling (amplifier status poll) keeps a pending hold",
+           poll.holdPending() && !poll.setCeiling(100, false) && poll.holdPending());
+
+    Selector clamp;
+    clamp.setCeiling(500, false);
+    clamp.observe(150.0, 0);
+    clamp.observe(150.0, kHold);
+    const bool settledLow = clamp.multiplier() == 10.0;
+    const bool lowered = clamp.setCeiling(20, false) && clamp.multiplier() == 2.0;
+    const bool raisedKeeps = !clamp.setCeiling(500, false) && clamp.multiplier() == 2.0;
+    report("a lower ceiling clamps the range; a higher one keeps the measured range",
+           settledLow && lowered && raisedKeeps);
+}
+
+// #6433: the reason for the range switch. On whatever range the switch settles,
+// a forward needle is high enough that the needle crossing clears the mask.
+void testRangeReadability() {
+    const CrossNeedleMeterGeometry geometry = CrossNeedleMeterGeometry::loadResource();
+    constexpr qint64 kHold = CrossNeedleRangeSelector::kDownRangeHoldMs;
+    const auto reflectedFor = [](double forward, double swr) {
+        return CrossNeedleMeterGeometry::reflectedPowerWatts(forward, swr);
+    };
+    const auto clearance = [&geometry](double forward, double reflected, double multiplier) {
+        const QPointF crossing = geometry.needleIntersection(forward, reflected, multiplier);
+        return maskBoundaryYAtX(geometry, crossing.x()) - crossing.y();
+    };
+
+    double worstFraction = 1.0;
+    double worst150 = std::numeric_limits<double>::infinity();
+    double worst135 = std::numeric_limits<double>::infinity();
+    std::string worstAt;
+    const double bottomFloor =
+        CrossNeedleRangeSelector::kDownRangeHeadroom * geometry.forwardFullScaleWatts(1.0);
+    const double topCeiling = CrossNeedleRangeSelector::kUpRangeFraction *
+                              geometry.forwardFullScaleWatts(geometry.rangeMultipliers.last());
+    for (double forward = bottomFloor; forward <= topCeiling; forward *= 1.03) {
+        // Approach each power from above (settling down) and from below
+        // (ranging up): the hysteresis band may settle them differently.
+        for (const bool fromBelow : {false, true}) {
+            CrossNeedleRangeSelector selector(geometry.rangeMultipliers,
+                                              geometry.forwardFullScaleWatts(1.0));
+            selector.setCeiling(100, true);
+            qint64 t = 0;
+            if (fromBelow) {
+                for (; t <= 2 * kHold; t += 100) {
+                    selector.observe(1.0, t);
+                }
+            }
+            for (const qint64 end = t + 3 * kHold; t <= end; t += 100) {
+                selector.observe(forward, t);
+            }
+            const double multiplier = selector.multiplier();
+            const double fraction = forward / geometry.forwardFullScaleWatts(multiplier);
+            const double c150 = clearance(forward, reflectedFor(forward, 1.5), multiplier);
+            const double c135 = clearance(forward, reflectedFor(forward, 1.35), multiplier);
+            if (fraction < worstFraction) {
+                worstFraction = fraction;
+                worstAt = std::to_string(forward) + " W on x" + std::to_string(multiplier);
+            }
+            worst150 = std::min(worst150, c150);
+            worst135 = std::min(worst135, c135);
+        }
+    }
+    report("auto-range never settles a forward needle below 36% of full scale",
+           worstFraction >= 0.355,
+           "worst_fraction=" + std::to_string(worstFraction) + " at " + worstAt);
+    report("auto-range keeps the SWR 1.5 crossing above the mask at every power",
+           worst150 > 20.0, "worst_clearance_px=" + std::to_string(worst150));
+    report("auto-range keeps the SWR 1.35 crossing above the mask at every power",
+           worst135 > 0.0, "worst_clearance_px=" + std::to_string(worst135));
+
+    // The defect itself: 150 W at SWR 1.35 on a 500 W radio. The old fixed
+    // 2 kW range hid the crossing; the 200 W range the switch picks shows it.
+    report("#6433 case: 150 W at SWR 1.35 was hidden on the fixed 2 kW range",
+           clearance(150.0, reflectedFor(150.0, 1.35), 100.0) < 0.0);
+    report("#6433 case: 150 W at SWR 1.35 is readable on the 200 W range",
+           clearance(150.0, reflectedFor(150.0, 1.35), 10.0) > 50.0);
+}
+
+// #6433: every range prints its own watts, legibly.
+void testScaleNumbers() {
+    const CrossNeedleMeterGeometry geometry = CrossNeedleMeterGeometry::loadResource();
+    QFont font = QApplication::font();
+    font.setWeight(QFont::Medium);
+
+    const auto texts = [](const CrossNeedleMeterGeometry::ScaleNumberLayout &layout) {
+        QStringList out;
+        for (const CrossNeedleMeterGeometry::ScaleNumber &number : layout.numbers) {
+            out << number.text;
+        }
+        return out;
+    };
+    const auto authored = [](const CrossNeedleMeterGeometry::Scale &scale) {
+        QStringList out;
+        for (const QString &label : scale.labels) {
+            if (!label.isEmpty()) {
+                out << label;
+            }
+        }
+        return out;
+    };
+    // Deepest overlap between any two printed numbers' text boxes. Numbers on
+    // an arc sit diagonally, so the approved x1 face itself has corner
+    // contacts; no range may crowd its numbers more than that face does.
+    const auto deepestOverlap = [&font](const CrossNeedleMeterGeometry::ScaleNumberLayout &layout) {
+        QFont sized = font;
+        sized.setPixelSize(layout.pixelSize);
+        const QFontMetricsF metrics(sized);
+        QVector<QRectF> boxes;
+        double deepest = 0.0;
+        for (const CrossNeedleMeterGeometry::ScaleNumber &number : layout.numbers) {
+            QRectF box = metrics.tightBoundingRect(number.text);
+            box.moveCenter(number.center);
+            for (const QRectF &other : boxes) {
+                const QRectF overlap = other.intersected(box);
+                if (!overlap.isEmpty()) {
+                    deepest = std::max(deepest, std::min(overlap.width(), overlap.height()));
+                }
+            }
+            boxes.append(box);
+        }
+        return deepest;
+    };
+
+    double authoredCrowding = 0.0;
+    for (const auto *scale : {&geometry.forwardScale, &geometry.reflectedScale}) {
+        const CrossNeedleMeterGeometry::ScaleNumberLayout x1 =
+            geometry.scaleNumberLayout(*scale, 1.0, font);
+        authoredCrowding = std::max(authoredCrowding, deepestOverlap(x1));
+        report("x1 range prints the authored face unchanged (every number, authored size)",
+               texts(x1) == authored(*scale) &&
+                   x1.pixelSize == geometry.typography.scaleNumberPixels,
+               texts(x1).join(QLatin1Char(' ')).toStdString());
+    }
+
+    const int minimumPixels = static_cast<int>(
+        std::ceil(geometry.typography.scaleNumberPixels *
+                  CrossNeedleMeterGeometry::kMinimumScaleNumberFraction));
+    bool everyRangeKeepsRoundValues = true;
+    double worstCrowding = 0.0;
+    bool everyRangeLegible = true;
+    std::string missing;
+    for (const double multiplier : geometry.rangeMultipliers) {
+        for (const auto *scale : {&geometry.forwardScale, &geometry.reflectedScale}) {
+            const CrossNeedleMeterGeometry::ScaleNumberLayout layout =
+                geometry.scaleNumberLayout(*scale, multiplier, font);
+            const QStringList printed = texts(layout);
+            const double full = scale->values.last() * multiplier;
+            for (const double value : {0.0, full / 2.0, full}) {
+                const QString text = CrossNeedleMeterGeometry::formatWatts(value);
+                if (!printed.contains(text)) {
+                    everyRangeKeepsRoundValues = false;
+                    missing += " x" + std::to_string(multiplier) + ":" + text.toStdString();
+                }
+            }
+            worstCrowding = std::max(worstCrowding, deepestOverlap(layout));
+            everyRangeLegible = everyRangeLegible && layout.pixelSize >= minimumPixels;
+        }
+    }
+    report("every range prints zero, half and full scale", everyRangeKeepsRoundValues, missing);
+    report("no range crowds its numbers more than the approved x1 face does",
+           worstCrowding <= authoredCrowding + 0.25,
+           "worst_px=" + std::to_string(worstCrowding) +
+               " authored_px=" + std::to_string(authoredCrowding));
+    report("no range shrinks its numbers below the legibility floor", everyRangeLegible);
+
+    const CrossNeedleMeterGeometry::ScaleNumberLayout aurora =
+        geometry.scaleNumberLayout(geometry.forwardScale, 50.0, font);
+    report("1 kW range prints the 500 W rated power of a 500 W radio",
+           texts(aurora).contains(QStringLiteral("500")),
+           texts(aurora).join(QLatin1Char(' ')).toStdString());
+    const CrossNeedleMeterGeometry::ScaleNumberLayout hundred =
+        geometry.scaleNumberLayout(geometry.forwardScale, 10.0, font);
+    report("200 W range prints the 100 W rated power of a 100 W radio",
+           texts(hundred).contains(QStringLiteral("100")),
+           texts(hundred).join(QLatin1Char(' ')).toStdString());
+    const int unnumbered = static_cast<int>(geometry.reflectedScale.labels.indexOf(QString()));
+    report("a tick the face leaves unnumbered stays unnumbered on every range",
+           unnumbered > 0 &&
+               CrossNeedleMeterGeometry::scaleLabelText(geometry.reflectedScale, unnumbered,
+                                                        10.0)
+                   .isEmpty());
+}
+
+// #6433: the widget wires live power to the range switch and reprints its face.
+void testWidgetAutoRange() {
+    CrossNeedleMeterWidget meter;
+    meter.resize(600, 400);
+    report("a new meter starts on the 200 W range of a 100 W radio",
+           meter.rangeMultiplier() == 10.0);
+
+    meter.setPowerScale(500, false);
+    report("a 500 W radio shows its 1 kW range before the first transmission",
+           meter.rangeMultiplier() == 50.0 && meter.rangeCeilingMultiplier() == 50.0);
+    const QImage kilowattFace = renderWidget(meter);
+
+    meter.setTransmitting(true);
+    meter.setTxPowers(150.0f, 3.33f);
+    report("150 W on the 1 kW range starts a down-range hold, not an instant switch",
+           meter.rangeMultiplier() == 50.0 && meter.rangeHoldPending());
+    meter.setPowerScale(500, false);
+    report("an unchanged power scale (status poll) leaves the hold running",
+           meter.rangeHoldPending());
+
+    processEventsFor(static_cast<int>(CrossNeedleRangeSelector::kDownRangeHoldMs) + 300);
+    report("with no further samples the hold timer completes the down-range (1 kW -> 200 W)",
+           meter.rangeMultiplier() == 10.0 && !meter.rangeHoldPending());
+    report("the accessible value names the active range in watts",
+           meter.accessibleValueText().contains(
+               QStringLiteral("range 200 watts forward, 40 watts reflected full scale")),
+           meter.accessibleValueText().toStdString());
+    meter.setTransmitting(false);
+    processEventsFor(400);
+    const QImage twoHundredFace = renderWidget(meter);
+    const QRect legendRegion(480, 16, 100, 80);
+    report("the face reprints its legend for the new range",
+           differingPixels(kilowattFace, twoHundredFace, legendRegion) > 100);
+
+    report("unkey keeps the range for the next over", meter.rangeMultiplier() == 10.0);
+    meter.setTransmitting(true);
+    meter.setTxPowers(500.0f, 20.0f);
+    report("500 W up-ranges immediately to 1 kW", meter.rangeMultiplier() == 50.0);
+    meter.setTransmitting(false);
+    meter.setTxPowers(10.0f, 0.4f);
+    processEventsFor(static_cast<int>(CrossNeedleRangeSelector::kDownRangeHoldMs) + 300);
+    report("a meter packet arriving after unkey does not move the range",
+           meter.rangeMultiplier() == 50.0 && !meter.rangeHoldPending());
+
+    meter.setPowerScale(100, true);
+    report("an active amplifier raises the ceiling to 2 kW without jumping the range",
+           meter.rangeCeilingMultiplier() == 100.0 && meter.rangeMultiplier() == 50.0);
+    meter.setPowerScale(100, false);
+    report("dropping the amplifier clamps the range to the radio's 200 W ceiling",
+           meter.rangeCeilingMultiplier() == 10.0 && meter.rangeMultiplier() == 10.0);
+}
+
 int main(int argc, char **argv) {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-cross-needle-meter-test"));
     if (!settingsProfile.isValid()) {
@@ -1500,6 +1811,10 @@ int main(int argc, char **argv) {
     testResourceAndConstruction();
     testMeterMathAndActiveProof();
     testWidgetStateAndRender();
+    testRangeSelector();
+    testRangeReadability();
+    testScaleNumbers();
+    testWidgetAutoRange();
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed."
                                         : (std::to_string(g_failed) + " test(s) failed.").c_str());
