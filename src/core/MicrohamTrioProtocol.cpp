@@ -1,5 +1,6 @@
 #include "core/MicrohamTrioProtocol.h"
 
+#include <QChar>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -193,6 +194,28 @@ bool parseToggle(const QJsonObject& groups, const QString& name,
                         toggle.buttons, failure);
 }
 
+bool isLowerHex(QChar ch)
+{
+    const char16_t code = ch.unicode();
+    return (code >= u'0' && code <= u'9') || (code >= u'a' && code <= u'f');
+}
+
+bool isSafeKey(const QString& key)
+{
+    if (key.isEmpty()) {
+        return false;
+    }
+    for (const QChar ch : key) {
+        const char16_t code = ch.unicode();
+        const bool ok = (code >= u'0' && code <= u'9') || (code >= u'a' && code <= u'z')
+                        || (code >= u'A' && code <= u'Z') || code == u'_' || code == u'-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
 qint64 backoffMs(int consecutiveFailures, const Policy& policy)
 {
     qint64 wait = std::max<qint64>(policy.failureBackoffMs, 0);
@@ -282,7 +305,7 @@ QByteArray encodeKeepAlive()
     return QByteArrayLiteral("ping");
 }
 
-Frame classify(quint8 firstByte, const QByteArray& payload)
+Frame classify(quint8 firstByte, const QByteArray& payload, const QString& pendingRequestId)
 {
     Frame out;
     if (firstByte == kPongFrame) {
@@ -300,9 +323,108 @@ Frame classify(quint8 firstByte, const QByteArray& payload)
     }
     out.state = parse(payload);
     if (out.state.snapshot) {
-        out.kind = FrameKind::State;
+        out.kind = acknowledges(*out.state.snapshot, pendingRequestId) ? FrameKind::StateReply
+                                                                       : FrameKind::State;
     }
     return out;
+}
+
+// Lowercase 8-4-4-4-12, and not the id the device uses for a push nobody
+// asked for: a reply carrying that one could not be told from a push.
+bool isUsableRequestId(const QString& id)
+{
+    if (id.size() != 36 || id == QLatin1String(kUnsolicitedId)) {
+        return false;
+    }
+    for (int i = 0; i < id.size(); ++i) {
+        const bool hyphenSlot = (i == 8 || i == 13 || i == 18 || i == 23);
+        if (hyphenSlot ? id.at(i) != QLatin1Char('-') : !isLowerHex(id.at(i))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool acknowledges(const Snapshot& snapshot, const QString& requestId)
+{
+    return isUsableRequestId(requestId) && snapshot.id == requestId;
+}
+
+Command encodeAntennaSelect(const Snapshot& snapshot, const QString& key,
+                            const QString& requestId)
+{
+    return encodeAntennaCommand(snapshot, AntennaField::Both, key, requestId);
+}
+
+Command encodeAntennaCommand(const Snapshot& snapshot, AntennaField field, const QString& key,
+                             const QString& requestId)
+{
+    Command out;
+    QByteArray body;
+    if (field == AntennaField::Split) {
+        if (key != QLatin1String(kToggleOn) && key != QLatin1String(kToggleOff)) {
+            out.error = CommandError::NoSuchButton;
+            return out;
+        }
+        body = QByteArrayLiteral("\"gid\": \"split\", \"v\": ") + key.toLatin1();
+    } else {
+        const Button* button = snapshot.antenna.find(key);
+        if (button == nullptr) {
+            out.error = CommandError::NoSuchButton;
+            return out;
+        }
+        if (!button->enabled && field != AntennaField::RxHalf) {
+            out.error = CommandError::ButtonDisabled;
+            return out;
+        }
+        if (field == AntennaField::Both && snapshot.split.on) {
+            out.error = CommandError::SplitEngaged;
+            return out;
+        }
+        if (field != AntennaField::Both && !snapshot.split.on) {
+            out.error = CommandError::SplitOff;
+            return out;
+        }
+        if (!isSafeKey(key)) {
+            out.error = CommandError::UnsafeKey;
+            return out;
+        }
+        switch (field) {
+        case AntennaField::Both:
+            body = QByteArrayLiteral("\"gid\": \"antenna\", \"v\": \"") + key.toLatin1() + '"';
+            break;
+        case AntennaField::TxHalf:
+            body = QByteArrayLiteral("\"gid\": \"antenna\", \"txv\": \"tx_") + key.toLatin1() + '"';
+            break;
+        case AntennaField::RxHalf:
+            body = QByteArrayLiteral("\"gid\": \"antenna\", \"rxv\": \"rx_") + key.toLatin1() + '"';
+            break;
+        case AntennaField::Split:
+            break;
+        }
+    }
+    if (!isUsableRequestId(requestId)) {
+        out.error = CommandError::BadRequestId;
+        return out;
+    }
+    out.frame = QByteArrayLiteral("{\"a\": \"set_value\", ") + body
+                + QByteArrayLiteral(", \"id\": \"") + requestId.toLatin1() + QByteArrayLiteral("\"}");
+    return out;
+}
+
+QString antennaFieldValue(const Snapshot& snapshot, AntennaField field)
+{
+    switch (field) {
+    case AntennaField::Both:
+        return snapshot.split.on ? QString() : snapshot.antenna.selected;
+    case AntennaField::TxHalf:
+        return snapshot.split.on ? snapshot.antennaTx : QString();
+    case AntennaField::RxHalf:
+        return snapshot.split.on ? snapshot.antennaRx : QString();
+    case AntennaField::Split:
+        return QLatin1String(snapshot.split.on ? kToggleOn : kToggleOff);
+    }
+    return {};
 }
 
 bool sessionDead(const State& state, const Policy& policy)

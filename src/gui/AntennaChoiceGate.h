@@ -21,6 +21,10 @@
 // waterfall are client-side streams), so a menu holding Kiwi receivers still
 // opens.
 //
+// A station antenna switch the connected radio is bound to (StationAntenna.h)
+// is the other real destination for TX as well as RX: it moves relays outside
+// the radio, so it is not virtual, and it is the first non-radio TX source.
+//
 // "Published" means the radio's own lists -- SliceModel::rxAntennaList() /
 // txAntennaList() and RadioModel::antennaList() -- and deliberately NOT
 // RadioModel::knownAntennaTokens(), which also folds in the slice's CURRENT
@@ -35,15 +39,16 @@
 namespace AetherSDR {
 
 [[nodiscard]] constexpr bool rxAntennaChoiceRefused(
-    bool connected, bool radioPublishedRxPorts, bool hasVirtualAntennas) noexcept
+    bool connected, bool radioPublishedRxPorts, bool hasVirtualAntennas,
+    bool hasStationAntennas) noexcept
 {
-    return connected && !radioPublishedRxPorts && !hasVirtualAntennas;
+    return connected && !radioPublishedRxPorts && !hasVirtualAntennas && !hasStationAntennas;
 }
 
 [[nodiscard]] constexpr bool txAntennaChoiceRefused(
-    bool connected, bool radioPublishedTxPorts) noexcept
+    bool connected, bool radioPublishedTxPorts, bool hasStationAntennas) noexcept
 {
-    return connected && !radioPublishedTxPorts;
+    return connected && !radioPublishedTxPorts && !hasStationAntennas;
 }
 
 }  // namespace AetherSDR
