@@ -87,6 +87,8 @@ What you can do:
 
 ### Panadapter scope modes
 
+The IC-705's receive attenuator offers OFF and 20 dB below 74.800000 MHz. The ATT button is dimmed until the radio confirms its frequency and at or above 74.800000 MHz. Returning to a supported band refreshes the button from the radio.
+
 The panadapter is the radio's own scope, and the radio owns the scope mode. On the IC-7300MK2, the IC-705 (firmware 1.20 or later) and the IC-9700 (firmware 1.30 or later) the **Scope** row in the Display panel offers the radio's three modes:
 
 | Mode | What the window does |

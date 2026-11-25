@@ -1727,17 +1727,18 @@ void IcomCivBackend::publishModelControls()
     }
     emit sliceChanged(sliceId(), s);
     publishPreampControls();
-    // ONE step, and naming it in dB is honest here where it was not for the
-    // preamp: the guide gives this attenuator an actual figure. HF and 50 MHz
-    // only — on higher bands the radio ignores the request and reports OFF.
-    const auto attenSteps = attenStepsFor(*m_model);
+    publishAttenuatorControls();
+}
+
+void IcomCivBackend::publishAttenuatorControls()
+{
+    const auto attenSteps = attenStepsFor(*m_model, m_frequencyHz);
     if (!attenSteps.empty()) {
         QStringList labels;
         for (const auto& a : attenSteps)
             labels << QString::fromUtf8(a.label.data(), static_cast<int>(a.label.size()));
         emit panAttenuatorInfoChanged(panId(), labels);
     }
-
 }
 
 void IcomCivBackend::publishPreampControls()
@@ -3084,6 +3085,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
                 // Read back the current stage after publishing its new ladder.
                 if (m_session) {
                     const auto read = cmdReadFunction(m_session->civAddress(), func::kPreamp);
+                    queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
+                    pumpCiv(frameAtMs);
+                }
+            }
+            if (attenStepsFor(*m_model, previousHz).size() != attenStepsFor(*m_model, *hz).size()) {
+                publishAttenuatorControls();
+                if (m_session) {
+                    const auto read = cmdReadAttenuator(m_session->civAddress());
                     queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
                     pumpCiv(frameAtMs);
                 }
@@ -5927,7 +5936,7 @@ void IcomCivBackend::setPanPreamp(const QString&, int step)
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kPreamp, wanted));
     emit panPreampChanged(panId(), wanted);
-    if (!attenStepsFor(*m_model).empty() && m_session) {
+    if (attenStepsFor(*m_model, m_frequencyHz).size() > 1 && m_session) {
         queueFrontEndInterlockRead(cmdReadAttenuator(m_session->civAddress()));
     }
 }
@@ -5947,9 +5956,10 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     // THE dB COMES FROM THE MODEL'S TABLE, not from a literal. A hardcoded 20
     // is the IC-705's single step; a radio with a different ladder would get
     // that number sent to a register that means something else.
-    const auto steps = attenStepsFor(*m_model);
-    if (steps.empty())
-        return;   // no verified ladder — the control was never published either
+    const auto steps = attenStepsFor(*m_model, m_frequencyHz);
+    if (steps.size() <= 1) {
+        return;
+    }
     const int wanted =
         std::clamp(step, 0, static_cast<int>(steps.size()) - 1);
     m_attenStep = wanted;
@@ -7638,7 +7648,11 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
 
     if (id == QLatin1String("rf.gain"))  { setPanRfGain(pan, m_rfGainPercent); return true; }
     if (id == QLatin1String("preamp"))   { reassertPanPreampWireStep(m_preampStep); return true; }
-    if (id == QLatin1String("atten"))    { setPanAttenuator(pan, m_attenStep); return true; }
+    if (id == QLatin1String("atten")) {
+        if (attenStepsFor(*m_model, m_frequencyHz).size() <= 1) { return false; }
+        setPanAttenuator(pan, m_attenStep);
+        return true;
+    }
     if (id == QLatin1String("rx.antenna")) {
         setSliceRxAntenna(slice, m_rxAntennaExternal
                                    ? QStringLiteral("RX-ANT")
