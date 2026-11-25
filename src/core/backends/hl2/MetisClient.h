@@ -495,10 +495,9 @@ public:
     [[nodiscard]] std::uint64_t cwLateKeyUps() const noexcept { return m_cwLateKeyUps; }
     // The current over's shift, in EP2 samples (I/O thread).
     [[nodiscard]] std::int64_t cwShiftSamples() const noexcept { return m_cwShiftSamples; }
-    // The on-air instant of the last scheduled key-up, or epoch zero. An
-    // atomic, so the GUI thread may read it: Hl2Backend's break-in hang waits
-    // for it, because a shifted key-up reaches the wire later than its instant
-    // plus the lead.
+    // The on-air instant of the last key-up placed on EP2 (scheduled, or the
+    // frame a late one is applied in), or epoch zero. An atomic, so the GUI
+    // thread may read it: Hl2Backend's break-in hang counts from it.
     [[nodiscard]] std::chrono::steady_clock::time_point cwScheduledUpOnAir() const noexcept
     {
         return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(
