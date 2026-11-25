@@ -812,7 +812,7 @@ static void restoreProbedSquelch(QPointer<SliceModel> slice, bool on, int level,
     }
     if (slice) {
         slice->setSquelch(on, level);
-        slice->setManualSquelchLevel(manual);
+        if (slice) { slice->setManualSquelchLevel(manual); }
     }
 }
 
@@ -2676,6 +2676,17 @@ void RadioCertification::stageSideband(const Options& o)
     if (!m_audio || !m_radio || !o.includeAudioProbe)
         return;
 
+    // Icom's 16 45 selects the radio's MONI audio. A tone at the output
+    // tap cannot distinguish that path from an independently tuned receiver.
+    if (m_radio->family() == QLatin1String("icom")) {
+        record(QStringLiteral("sideband"), QStringLiteral("Transmit/receive sideband agreement"),
+               QJsonObject{{QStringLiteral("txRxSidebandAgree"), QJsonValue::Null}},
+               QStringLiteral("Icom routes transmitter monitor audio to this capture."),
+               QStringLiteral("INCONCLUSIVE — use a separate receiver to verify transmitted sideband"),
+               QStringLiteral("docs/HERMES.md 14.6"));
+        return;
+    }
+
     // Sideband check: demodulate our own transmission. A 1 kHz USB tone received
     // in USB must return 1 kHz; an inverted TX lands in LSB instead. The
     // panadapter can't answer this (raw wire order agrees with the transmitter by
@@ -3148,7 +3159,7 @@ QJsonObject RadioCertification::run(const Options& o)
 
     // EVERYTHING ABOVE IS RESTORED BY THIS ONE GUARD, INCLUDING THE UNKEY.
     //
-    // The unkey/tone/monitor half used to be straight-line code at the end of
+    // The unkey/tone cleanup used to be straight-line code at the end of
     // run(). There is no reachable path past it today, but the failure mode if
     // one were ever added is uniquely bad on this verb: an early return would
     // leave the radio KEYED, and the same missed epilogue would leave the
@@ -3164,7 +3175,6 @@ QJsonObject RadioCertification::run(const Options& o)
         if (quindar)
             quindar->setEnabled(quindarWas);
         if (m_radio) {
-            m_radio->setTxAudioMonitor(false);
             if (powerToRestore >= 0)
                 m_radio->transmitModel().setRfPower(powerToRestore);
             // ...and back on the operator's frequency and mode, not ours.

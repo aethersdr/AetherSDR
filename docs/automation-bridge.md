@@ -1307,7 +1307,9 @@ the starting drive and the bridge ceiling. The DSP check needs a fresh keyed
 TX:MICPEAK sample. Carrier suppression uses fresh forward watts from the silent
 key. Missing readings are reported as `null`. The lifecycle stage records the
 peak sample amplitude across the output channels during transmit, including
-zero for a continuing stream of digital silence.
+zero for a continuing stream of digital silence. Icom MONI returns transmitter
+monitor audio. The sideband stage on Icom leaves MONI alone and requests
+verification on a separate receiver.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
