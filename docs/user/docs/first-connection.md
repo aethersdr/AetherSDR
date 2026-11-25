@@ -41,6 +41,8 @@ The window automatically fits its height to the available screen space, includin
 3. Select your radio and click **Connect**. The connection is saved in this location.
 4. The spectrum, waterfall and receive audio start.
 
+For **Networked Icoms**, choose **+ Add radio by IP**, select **Icom (network)** and enter the radio’s address and credentials. Click **Connect by IP**. Your location remembers the radio. On later visits, select it and click **Connect**. See [Networked Icoms](./networked-icom.md).
+
 **Nearby radios** opens the full discovery list. Select a radio and click **Save selected radio to location**, then **‹ Back to Locations** to return to the launcher. Discovery continues as you browse locations. If nothing appears, use **Retry Discovery** or **Open Network Diagnostics** there.
 
 The list can also include:

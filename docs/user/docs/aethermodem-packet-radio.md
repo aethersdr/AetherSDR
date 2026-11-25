@@ -3,18 +3,18 @@ title: "AetherModem Packet Radio"
 slug: "/aethermodem-packet-radio"
 description: "AetherModem is AetherSDR's built-in AX.25 packet modem."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icoms (IC-705 and IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icoms (IC-705 and IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
 
 :::
 
 AetherModem is AetherSDR's built-in AX.25 packet modem. It decodes and transmits packet without an external TNC or a sound-card modem such as Dire Wolf, and on top of it sit an **APRS client**, a **WIDE1-1 fill-in digipeater**, a **KISS-over-TCP TNC** for other packet programs, a connected-mode **terminal** for calling a BBS, and a **personal mailbox** that other stations can connect to.
 
-AetherModem works on FlexRadio, on the [Hermes-Lite 2](./hermes-lite-2.md) and on [Networked Icom](./networked-icom.md) radios. On a FlexRadio it transmits through DAX TX: the modem keys PTT itself and restores your previous DAX state afterwards.
+AetherModem works on FlexRadio, on the [Hermes-Lite 2](./hermes-lite-2.md) and on [Networked Icoms](./networked-icom.md). On a FlexRadio it transmits through DAX TX: the modem keys PTT itself and restores your previous DAX state afterwards.
 
 ## Setup
 

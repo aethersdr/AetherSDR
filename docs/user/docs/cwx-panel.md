@@ -3,16 +3,16 @@ title: "CWX Panel"
 slug: "/cwx-panel"
 description: "The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in macros, keyed by the radio's own CW text keyer."
 status: "Supported"
-applies_to: ["FlexRadio", "IC-7300MK2", "IC-705 (early)"]
+applies_to: ["FlexRadio", "IC-7300MK2", "IC-705"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, IC-7300MK2, IC-705 (early)
+**Status:** Supported · **Applies to:** FlexRadio, IC-7300MK2, IC-705
 
 :::
 
-The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in macros, keyed by the radio's own CW text keyer. On a FlexRadio it uses the radio's CWX keyer; on a supported [Networked Icom](./networked-icom.md) radio the same panel drives the radio's CI-V text keyer and is labeled **CWK**.
+The CWX (CW Transmit) panel sends Morse code typed on your keyboard or stored in macros, keyed by the radio's own CW text keyer. On a FlexRadio it uses the radio's CWX keyer; on supported [Networked Icoms](./networked-icom.md) the same panel drives the radio's CI-V text keyer and is labeled **CWK**.
 
 ## Requirements
 

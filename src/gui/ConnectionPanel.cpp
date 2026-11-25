@@ -1136,7 +1136,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent, RemoteDiscovery remoteDiscover
     // or pick the model directly ("IC-9700 — A2"). The objectName is kept so
     // the refusal names the field a script already uses.
     connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) { syncIcomCivCustomRow(); });
+            this, [this](int) { syncIcomModelRows(); });
 
     // ANAN-G2's front-end options (DDC0 rate, ADC select, dither,
     // randomization, the two filter-bank bypasses and the radio-speaker stream)
@@ -1693,6 +1693,8 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomPassword.clear();
     m_pendingIcomUsername.clear();
     m_pendingIcomHost.clear();
+    m_pendingIcomStation.clear();
+    m_pendingIcomConnection = {};
     m_pendingIcomResolvedHost.clear();
     m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
@@ -1766,10 +1768,13 @@ void ConnectionPanel::setConnected(bool connected)
             // address at the next launch. Icom cannot be probed anonymously,
             // so commit it only after the authenticated session proves the
             // host and credentials together.
-            saveManualProfile(m_pendingIcomHost,
-                              m_pendingIcomBindSettings,
-                              m_pendingIcomSessionBindAddress,
-                              m_pendingIcomBasePort);
+            const QJsonObject route = saveManualProfile(m_pendingIcomHost, m_pendingIcomBindSettings,
+                m_pendingIcomSessionBindAddress, m_pendingIcomBasePort, false);
+            if (!m_pendingIcomConnection.isEmpty()) {
+                m_pendingIcomConnection["route"] = route;
+                m_pendingIcomConnection["credentialId"] = credentialId;
+                storeWorkspaceConnection(m_pendingIcomConnection, m_pendingIcomStation, false);
+            }
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
                 // Mirror the profile under that key as well so a hostname such
@@ -2856,10 +2861,18 @@ void ConnectionPanel::populateIcomCivCombo()
         break;
     }
     }
-    syncIcomCivCustomRow();
+    syncIcomModelRows();
 }
 
-void ConnectionPanel::syncIcomCivCustomRow()
+bool ConnectionPanel::ic7110Selected() const
+{
+    // Model entries carry their factory CI-V address. Auto and Custom carry
+    // sentinels, so a custom bus address cannot be mistaken for a model.
+    return currentManualFamily() == QLatin1String(kFamilyIcom)
+        && m_manualIcomCivCombo->currentData().toString() == QLatin1String("BA");
+}
+
+void ConnectionPanel::syncIcomModelRows()
 {
     if (!m_manualIcomCivCombo || !m_manualIcomCivCustomRow)
         return;
@@ -2867,7 +2880,7 @@ void ConnectionPanel::syncIcomCivCustomRow()
     const bool custom =
         m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
     m_manualIcomCivCustomRow->setVisible(icom && custom);
-    m_ic7110MarketRow->setVisible(icom);
+    m_ic7110MarketRow->setVisible(ic7110Selected());
 }
 
 void ConnectionPanel::syncIcomPortCustomRow()
@@ -2912,7 +2925,7 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualIcomCivRow->setVisible(icom);
     // The hex row has a second condition — "Custom..." — so it gets the shared
     // helper rather than a copy of the visibility rule.
-    syncIcomCivCustomRow();
+    syncIcomModelRows();
     syncIcomPortCustomRow();
 
     if (m_manualAnanHintRow)
@@ -3030,13 +3043,13 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
     m_manualIpCombo->setCurrentText(normalized);
 }
 
-void ConnectionPanel::saveManualProfile(const QString& targetIp,
+QJsonObject ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
                                         const QHostAddress& lastSuccessfulLocalIp,
                                        quint16 icomBasePort, bool rememberWorkspace)
 {
     if (targetIp.trimmed().isEmpty())
-        return;
+        return {};
 
     QJsonObject profiles = loadRoutedProfiles();
     QJsonObject profile;
@@ -3066,7 +3079,12 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
 
     profiles[targetIp] = profile;
     saveRoutedProfiles(profiles);
-    if (rememberWorkspace) { rememberWorkspaceManual(targetIp, profile); }
+    if (rememberWorkspace && !m_workspace.isEmpty()) {
+        QJsonObject connection = manualWorkspaceConnection(targetIp);
+        connection["route"] = profile;
+        storeWorkspaceConnection(connection, m_pendingWorkspaceStation, false);
+    }
+    return profile;
 }
 
 void ConnectionPanel::onManualIpChanged(const QString& ip)
@@ -3413,9 +3431,17 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             resolved = hostInfo.addresses().first();
         }
         m_pendingIcomResolvedHost = resolved.toString();
-        const QString market = m_ic7110Market->currentData().toString();
-        IcomSettings::setIc7110Market(trimmedIp, basePort, market);
-        IcomSettings::setIc7110Market(m_pendingIcomResolvedHost, basePort, market);
+        // Auto and Custom can reuse an endpoint's saved region. Only an
+        // explicit IC-7110 selection edits it.
+        const bool editRegion = ic7110Selected();
+        const QString market = editRegion ? m_ic7110Market->currentData().toString()
+                                          : IcomSettings::ic7110Market(trimmedIp, basePort);
+        if (editRegion) {
+            IcomSettings::setIc7110Market(trimmedIp, basePort, market);
+        }
+        if (m_pendingIcomResolvedHost != trimmedIp && (editRegion || !market.isEmpty())) {
+            IcomSettings::setIc7110Market(m_pendingIcomResolvedHost, basePort, market);
+        }
 
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
@@ -3437,6 +3463,16 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.isRouted           = true;
         info.bindSettings       = bindSettings;
         info.sessionBindAddress = m_pendingIcomSessionBindAddress;
+        // Successful-target bookkeeping can clear the chooser selection before
+        // authentication commits this route. Keep the path and its location
+        // with the credentials for this specific attempt.
+        if (!m_workspace.isEmpty()) {
+            m_pendingIcomStation = m_pendingWorkspaceStation.isEmpty()
+                ? m_workspace.value("selectedStation").toString() : m_pendingWorkspaceStation;
+            m_pendingIcomConnection = manualWorkspaceConnection(trimmedIp);
+            m_pendingIcomConnection["username"] = m_pendingIcomUsername;
+            m_pendingIcomConnection["serial"] = info.serial;
+        }
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
         finishManualProbe(info);
@@ -4804,7 +4840,7 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         bool stale = false;
         const RadioBindSettings bind = currentManualBindSettings(&stale);
         if (stale) { setStatusText(tr("Choose an available source interface before saving.")); return; }
-        if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        if (ic7110Selected()) {
             IcomSettings::setIc7110Market(host, selectedIcomBasePort(), m_ic7110Market->currentData().toString());
         }
         saveManualProfile(host, bind, bind.bindAddress);
@@ -5139,17 +5175,16 @@ void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
         m_workspace.value("selectedStation").toString());
 }
 
-void ConnectionPanel::rememberWorkspaceManual(const QString& host, const QJsonObject& route)
+QJsonObject ConnectionPanel::manualWorkspaceConnection(const QString& host)
 {
-    if (m_workspace.isEmpty()) { return; }
     if (m_pendingWorkspaceConnection.isEmpty()) { m_pendingWorkspaceConnection = ConnectionWorkspace::newId(); }
-    storeWorkspaceConnection({{"id", m_pendingWorkspaceConnection},
+    return {{"id", m_pendingWorkspaceConnection},
         {"name", m_manualConnectionName->text().trimmed().isEmpty() ? host : m_manualConnectionName->text().trimmed()},
         {"model", m_manualRadioTypeCombo->currentText()},
-        {"kind", "manual"}, {"family", currentManualFamily()}, {"host", host}, {"route", route},
+        {"kind", "manual"}, {"family", currentManualFamily()}, {"host", host},
         {"username", m_manualIcomUserEdit->text().trimmed()}, {"civ", m_manualIcomCivCombo->currentData().toString()},
         {"credentialId", boundIcomCredentialId()},
-        {"customCiv", m_manualIcomCivEdit->text()}, {"lowBandwidth", m_lowBwCheck->isChecked()}}, m_pendingWorkspaceStation, false);
+        {"customCiv", m_manualIcomCivEdit->text()}, {"lowBandwidth", m_lowBwCheck->isChecked()}};
 }
 
 void ConnectionPanel::saveWorkspaceSelection()

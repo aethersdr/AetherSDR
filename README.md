@@ -115,9 +115,9 @@ supported on its own (both below); FlexRadio remains the primary target:
   IO board's status registers, PureSignal adaptive predistortion, receive
   noise reduction and auto notch, PA current in amps, and receiver IQ for TCI
   clients.
-- **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
-  on the IC-705 (receive, scope, transmit, FT8) and completed against a live
-  IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
+- **Networked Icoms** — the **IC-705** and **IC-7300MK2** are **Supported**.
+  Add the radio in **File → Connect to Radio...** and select its saved entry
+  to reconnect. AetherSDR uses CI-V and the RS-BA1 protocol directly.
   The connect path asks the radio for its own CI-V address rather than assuming
   one. On the IC-7300MK2 and IC-705, and on the IC-9700, which is not yet
   verified, the panadapter runs in SCROLL-F, tuning in place and scrolling at
@@ -127,9 +127,7 @@ supported on its own (both below); FlexRadio remains the primary target:
   transmit. The IC-7610, IC-7760 and IC-7851 are **experimental**, with shared
   dual-receiver MAIN/SUB control, scope and audio confirmed on an IC-7851;
   transmit is enabled on them but has not been qualified on hardware.
-  Scope-capable models get native Band and Segment Zoom. The **IC-7300MK2 over
-  built-in Ethernet/RS-BA1 is supported** as of v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
-  every other Icom model keeps the early, experimental treatment.
+  Scope-capable models get native Band and Segment Zoom.
 - **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, live DDC
   rate changes, and DDC0 edge-droop compensation derived from the Saturn
@@ -287,8 +285,8 @@ Currently in flight:
   receive-only remote clients with pairing; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
 - **Non-Flex backends** — Hermes-Lite 2 (supported in the desktop application;
-  aetherd and other gateware or boards experimental), networked Icom (early;
-  the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
+  aetherd and other gateware or boards experimental), Networked Icoms
+  (IC-705 and IC-7300MK2 supported), and ANAN-G2 and RTL-SDR
   (experimental, receive-only). Current coverage and
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is

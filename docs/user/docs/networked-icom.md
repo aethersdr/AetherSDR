@@ -1,20 +1,20 @@
 ---
-title: "Networked Icom"
+title: "Networked Icoms"
 slug: "/networked-icom"
 description: "AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol."
-status: "Early"
-applies_to: ["Networked Icom"]
+status: "Supported"
+applies_to: ["Networked Icoms (IC-705 and IC-7300MK2)"]
 ---
 
 :::info[Status]
 
-**Status:** Early · **Applies to:** Networked Icom
+**Status:** Supported · **Applies to:** Networked Icoms (IC-705 and IC-7300MK2)
 
 :::
 
 AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol. No Icom software and no USB cable are needed.
 
-The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Icom shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. FlexRadio remains AetherSDR's supported target; see [Supported Radios](./supported-radios.md).
+The **IC-705** and **IC-7300MK2** are supported. See [Supported Radios](./supported-radios.md) for the full hardware list.
 
 ## Where to go next
 
@@ -26,17 +26,17 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 - [Memory Channels](./memory-channels.md): the shared bank, with import from the radio.
 - [USB Control Surfaces](./usb-control-surfaces.md): the Icom RC-28 remote encoder.
 
-## Requirements
+## Models
 
-| Model | Network | Status |
-|-------|---------|--------|
-| **IC-7300MK2** | Built-in Ethernet | **Supported**: no EXPERIMENTAL badge |
-| **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
-| **IC-7110** | Wi-Fi | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
-| **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
-| **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
-| **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
-| IC-905 | Ethernet | Listed in the model chooser, not verified |
+| Model | Status |
+|-------|--------|
+| **IC-705** | **Supported** |
+| **IC-7300MK2** | **Supported** |
+| **IC-7110** | Experimental receive-only profile with MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
+| **IC-9700** | Early (experimental); works, with read-only memories |
+| **IC-7610, IC-7760** | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
+| **IC-7851** | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
+| IC-905 | Listed in the model chooser, not verified |
 
 The original IC-7300 has no network port and is not in the model list.
 
@@ -48,7 +48,7 @@ Enable network (remote) control and create a network user name and password. Aet
 
 ### Connecting
 
-Networked Icoms are not discovered automatically. Open **File → Connect to Radio...**, choose **+ Add radio by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
+To add a radio, open **File → Connect to Radio...**, choose **+ Add radio by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
 
 <img src="/img/screens/connect-icom-rows.png" width="912" alt="Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander." />
 
@@ -62,7 +62,7 @@ Networked Icoms are not discovered automatically. Open **File → Connect to Rad
 | **Icom ports:** | **Standard (50001–50003)**, or **Custom NAT ports...** with a **First UDP port:**. AetherSDR uses that port and the next two. Different port triplets let you reach several radios behind one NAT router. |
 | **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address prevents the app from identifying the radio and enabling frequency readback, the panadapter, receive audio or transmit. |
 
-Click **Connect by IP**. The model is identified over the wire, not from the radio's name. If the handshake fails, the message names the target and the likely cause.
+Choose **Connect by IP**. After a successful login, the radio appears in your selected location. Next time, select it in the chooser and click **Connect**. With **Auto-detect (recommended)**, AetherSDR identifies the IC-705 by CI-V. The model list also offers **IC-705 — A4** for its factory address. If the handshake fails, the message names the target and the likely cause.
 
 ### Wake Icom on connect
 
@@ -146,7 +146,7 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7110
 
-In **Connect by IP**, choose Icom and set **IC-7110 region** to the radio's market. The region is available with **Auto-detect (recommended)** and is saved for that host and port. You can also choose **IC-7110** in the **Icom CI-V:** menu. Its factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
+In **Connect by IP**, select **IC-7110** under **Icom CI-V** to show **IC-7110 region**. Choose the radio’s market and save or connect. AetherSDR remembers the region for that host and port, including when you later use **Auto-detect (recommended)**. The factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
 
 | Radio region | Receive tuning in AetherSDR |
 | --- | --- |

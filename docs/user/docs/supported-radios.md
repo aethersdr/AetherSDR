@@ -9,7 +9,7 @@ AetherSDR is a client for **FlexRadio** transceivers, and FlexRadio is the suppo
 ## Where to go next
 
 - **FlexRadio:** [FlexRadio](./flexradio.md), then [First Connection](./first-connection.md) and [Your First Session](./your-first-session.md).
-- **Another radio family:** [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icom](./networked-icom.md), [ANAN-G2](./anan-g2.md), [RTL-SDR](./rtl-sdr.md) or [KiwiSDR and Web-888](./kiwisdr-and-web-888.md).
+- **Another radio family:** [Hermes-Lite 2](./hermes-lite-2.md), [Networked Icoms](./networked-icom.md), [ANAN-G2](./anan-g2.md), [RTL-SDR](./rtl-sdr.md) or [KiwiSDR and Web-888](./kiwisdr-and-web-888.md).
 - **No radio:** [Demo Mode](./demo-mode.md).
 
 ## FlexRadio (supported)
@@ -30,22 +30,23 @@ The rest of this documentation describes FlexRadio operation unless a page says 
 | Family | Status | Connects by | Page |
 |--------|--------|-------------|------|
 | Hermes-Lite 2 | **Supported** in the desktop application (board id 6 over Ethernet, gateware 74; Windows not yet certified) | LAN discovery, or Connect by IP | [Hermes-Lite 2](./hermes-lite-2.md) |
-| Networked Icom (IC-705, IC-7300MK2, IC-9700 …) | **Early**; the **IC-7300MK2 is supported** | Connect by IP | [Networked Icom](./networked-icom.md) |
+| Networked Icoms (IC-705, IC-7300MK2) | **Supported** | Add by IP, then select the saved radio | [Networked Icoms](./networked-icom.md) |
+| Other Networked Icoms | **Experimental** | Add by IP, then select the saved radio | [Model list](./networked-icom.md#models) |
 | ANAN-G2 | **Experimental, receive-only** | LAN discovery, or Connect by IP | [ANAN-G2](./anan-g2.md) |
 | RTL-SDR USB dongles | **Experimental, receive-only** | USB discovery (builds with the RTL-SDR backend) | [RTL-SDR](./rtl-sdr.md) |
 | KiwiSDR and Web-888 | Public receivers used as receive-only antennas for a slice | Radio Setup → Antennas | [KiwiSDR and Web-888](./kiwisdr-and-web-888.md) |
 | Demo | Built-in simulator, cannot transmit | The Connect to Radio list | [Demo Mode](./demo-mode.md) |
 
-The Hermes-Lite 2 is supported in the desktop application: board id 6 over Ethernet / openHPSDR Protocol 1, with gateware 74. Windows is not certified until a Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one Icom model supported on its own; every other Icom model keeps the early, experimental treatment.
+The Hermes-Lite 2 is supported in the desktop application: board id 6 over Ethernet / openHPSDR Protocol 1, with gateware 74. Windows is not certified until a Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental.
 
-While an ANAN-G2, an Icom other than the IC-7300MK2, or a Hermes-Lite 2 on gateware other than 74 or on a board that names itself in its gateware version is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
+While an ANAN-G2, an experimental Icom model, or a Hermes-Lite 2 on gateware other than 74 or on a board that names itself in its gateware version is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
 
 ## Setup
 
 How you reach each family from the **Connect to Radio** window (**File → Connect to Radio...**):
 
 - **On This Network** lists FlexRadio, Hermes-Lite 2 and ANAN-G2 radios on your LAN, RTL-SDR dongles on USB, and the demo.
-- **Connect by IP** has a **Radio type:** list (FlexRadio, Hermes-Lite 2, ANAN-G2, Icom (network), RTL-SDR (USB)). A networked Icom is always reached this way. See [Manual Connection](./manual-connection.md).
+- **Connect by IP** has a **Radio type:** list (FlexRadio, Hermes-Lite 2, ANAN-G2, Icom (network), RTL-SDR (USB)). Add Networked Icoms here and use **Save connection** to keep them in the chooser. See [Manual Connection](./manual-connection.md).
 - **KiwiSDR and Web-888** receivers are configured under **Tools → Configure KiwiSDR...** and chosen as a slice's RX antenna.
 
 ## Reference
@@ -54,7 +55,7 @@ How you reach each family from the **Connect to Radio** window (**File → Conne
 
 This table lists only what has been confirmed for each family. A **?** means not yet confirmed for that family, not that it is known to work or fail.
 
-| | FlexRadio | Hermes-Lite 2 | Networked Icom | ANAN-G2 | RTL-SDR | Demo |
+| | FlexRadio | Hermes-Lite 2 | Networked Icoms | ANAN-G2 | RTL-SDR | Demo |
 |---|---|---|---|---|---|---|
 | **Transmit** | Yes | Yes (SSB voice, CW, data) | Yes on recognized models; none on an unrecognized model | No | No | No |
 | **Receivers / slices** | As reported by the radio | Up to 4 (A–D) | Per model | 2 (RX1, RX2) | 1 | 1 |
