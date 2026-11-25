@@ -51,3 +51,5 @@ See CONSTITUTION.md for the full list. -->
       affected READMEs. **Not `CHANGELOG.md`**, which is a release-prep file a
       PR must not add to (AGENTS.md); describe it in the Summary above instead
 - [ ] Security-sensitive changes reference a GHSA if applicable
+- [ ] Adds a TCI extension beyond TCI 2.1? The body supplies AGENTS.md
+      §"TCI extensions beyond TCI 2.1" items (a)–(e) and links the RFC
