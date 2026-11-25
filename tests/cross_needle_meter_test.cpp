@@ -1810,6 +1810,30 @@ void testWidgetAutoRange() {
     meter.setPowerScale(100, false);
     report("dropping the amplifier clamps the range to the radio's 200 W ceiling",
            meter.rangeCeilingMultiplier() == 10.0 && meter.rangeMultiplier() == 10.0);
+
+    // A hold whose deadline passes during an SSB pause or CW gap (last sample
+    // below the 0.5 W floor) must not re-arm the timer: an overdue hold used
+    // to restart it at 1 ms, every millisecond, on the GUI thread until the
+    // next real sample. The hold stays pending; that sample completes it.
+    CrossNeedleMeterWidget pause;
+    pause.setPowerScale(500, false);
+    pause.setTransmitting(true);
+    pause.setTxPowers(500.0f, 20.0f);
+    pause.setTxPowers(150.0f, 3.33f);
+    const bool holdStarted = pause.rangeMultiplier() == 30.0 && pause.rangeHoldPending() &&
+                             pause.rangeHoldTimerActive();
+    pause.setTxPowers(0.1f, 0.0f);
+    processEventsFor(static_cast<int>(CrossNeedleRangeSelector::kDownRangeHoldMs) + 300);
+    report("an overdue hold during a sub-floor pause leaves the timer idle, not re-armed",
+           holdStarted && pause.rangeHoldPending() && !pause.rangeHoldTimerActive() &&
+               pause.rangeMultiplier() == 30.0);
+    processEventsFor(200);
+    report("the idle timer stays idle through the rest of the pause",
+           !pause.rangeHoldTimerActive() && pause.rangeHoldPending());
+    pause.setTxPowers(150.0f, 3.33f);
+    report("the next sample above the floor completes the overdue hold (600 W -> 200 W)",
+           pause.rangeMultiplier() == 10.0 && !pause.rangeHoldPending() &&
+               !pause.rangeHoldTimerActive());
 }
 
 int main(int argc, char **argv) {

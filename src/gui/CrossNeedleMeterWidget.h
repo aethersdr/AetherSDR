@@ -45,6 +45,7 @@ class CrossNeedleMeterWidget : public QWidget {
     double rangeMultiplier() const { return m_rangeMultiplier; }
     double rangeCeilingMultiplier() const { return m_rangeSelector.ceilingMultiplier(); }
     bool rangeHoldPending() const { return m_rangeSelector.holdPending(); }
+    bool rangeHoldTimerActive() const { return m_rangeHoldTimer.isActive(); }
     bool isTransmitting() const { return m_transmitting; }
     bool reflectedPowerMeasured() const { return m_reflectedPowerMeasured; }
     bool rangeLegendVisible() const { return m_rangeLegendVisible; }

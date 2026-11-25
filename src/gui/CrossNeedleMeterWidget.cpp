@@ -276,9 +276,17 @@ void CrossNeedleMeterWidget::scheduleRangeHold() {
         return;
     }
     if (!m_rangeHoldTimer.isActive()) {
+        const qint64 remaining = m_rangeSelector.holdRemainingMs(m_rangeClock.elapsed());
+        if (remaining <= 0) {
+            // Overdue, so the last sample was below the signal floor (an SSB
+            // pause or CW gap while keyed). Re-arming here would spin a 1 ms
+            // timer on the GUI thread until the next real sample, and that
+            // sample completes the hold in observe() anyway: sub-floor
+            // samples neither start nor end a hold.
+            return;
+        }
         // +1 ms so the deadline has passed when the timer fires.
-        m_rangeHoldTimer.start(
-            static_cast<int>(m_rangeSelector.holdRemainingMs(m_rangeClock.elapsed())) + 1);
+        m_rangeHoldTimer.start(static_cast<int>(remaining) + 1);
     }
 }
 
