@@ -1809,10 +1809,15 @@ std::int64_t MetisClient::cwSampleAt(std::chrono::steady_clock::time_point t) co
 {
     constexpr std::int64_t kNsPerSecond = 1'000'000'000;
     const std::int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t - m_cwAnchor).count();
-    if (ns < 0) {
-        return std::numeric_limits<std::int64_t>::min() / 2;   // before the session: late
+    if (ns == std::numeric_limits<std::int64_t>::min()) {
+        return std::numeric_limits<std::int64_t>::min() / 2;   // unrepresentable: late, refused
     }
-    return (ns / kNsPerSecond) * kEp2AudioRateHz + (ns % kNsPerSecond) * kEp2AudioRateHz / kNsPerSecond;
+    // Before the anchor is a negative sample, floored, so an edge stamped just
+    // before start() is late by its real distance, not refused outright.
+    const std::int64_t mag = ns < 0 ? -ns : ns;
+    const std::int64_t part = (mag % kNsPerSecond) * kEp2AudioRateHz;
+    const std::int64_t whole = (mag / kNsPerSecond) * kEp2AudioRateHz + part / kNsPerSecond;
+    return ns < 0 ? -(whole + (part % kNsPerSecond != 0 ? 1 : 0)) : whole;
 }
 
 void MetisClient::enterCwMode(const TxCoordinator::Operation& operation)

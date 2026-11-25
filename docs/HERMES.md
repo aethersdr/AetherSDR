@@ -1906,7 +1906,10 @@ keeps both workflows consistent:
   effect on the next frame built: an unscheduled key-down flushes pending
   scheduled edges and is a hold of its own, kept while its own operation
   permits dispatch, so a paddle's release clears only the paddle's
-  contribution; an unscheduled key-up ends every hold. Unkeying manual
+  contribution; an unscheduled key-up ends every hold. With key sources
+  overlapping, the last one wins: an unscheduled key-down drops the keyer
+  elements already inside the edge lead and keeps the carrier on through its
+  hold, and an unscheduled key-up cuts a keyer element in progress. Unkeying manual
   MOX/PTT (break-in off) flushes the schedule at once: the operator's unkey
   wins, so an element still inside the lead (plus any shift) is cut or not
   sent. The
