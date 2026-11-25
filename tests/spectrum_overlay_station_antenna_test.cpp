@@ -1,6 +1,8 @@
 // The panadapter's RX ANT combo with a station antenna switch (#7416 review):
-// a refresh asked for while the list is open is replayed when it closes, and
-// a station pick does not rebuild the combo inside its own index signal.
+// a refresh asked for while the list is open is replayed when it closes, a
+// station pick does not rebuild the combo inside its own index signal, and on
+// a radio with one RX port (the HL2's "ANT") the combo's current row is the
+// switch's port, as the slice's RX ANT field is.
 //
 // Widget only, offscreen: a real RadioModel with no backend and a hand-made
 // station source; no socket, no radio, nothing keyed.
@@ -8,7 +10,10 @@
 // Run:  QT_QPA_PLATFORM=offscreen ./build/spectrum_overlay_station_antenna_test
 
 #include "gui/SpectrumOverlayMenu.h"
+#include "gui/StationAntennaMenu.h"
+#include "core/backends/SliceDelta.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/StationAntenna.h"
 
 #include <QAbstractItemModel>
@@ -47,9 +52,78 @@ static int rowOf(const QComboBox& combo, const QString& text)
     return -1;
 }
 
+static StationAntennaView switchView()
+{
+    StationAntennaView view;
+    view.id = QStringLiteral("sw");
+    view.active = true;
+    view.heading = QStringLiteral("Test switch");
+    view.rx = {choice(QStringLiteral("SW:1"), QStringLiteral("One")),
+               choice(QStringLiteral("SW:2"), QStringLiteral("Two"))};
+    view.rxCurrent = QStringLiteral("SW:1");
+    view.rxLabel = QStringLiteral("One");
+    return view;
+}
+
+// Ruling 5 on the third RX surface (#7416 review, nit 1): the radio has at
+// most one RX port, so the switch's position is the only thing the combo can
+// tell, the same rule as stationAntennaField(). Two radio ports keep the
+// radio's own current row.
+static void testOnePortComboShowsTheSwitch()
+{
+    QWidget parent;
+    parent.resize(800, 600);
+    SpectrumOverlayMenu menu(&parent);
+    RadioModel radio;
+    if (!radio.automationApplySliceFixture(0, QStringLiteral("A")) || !radio.slice(0)) {
+        check(false, "fixture: a slice");
+        return;
+    }
+    SliceModel* slice = radio.slice(0);
+    SliceDelta hl2;
+    hl2.rxAntennaList = QStringList{QStringLiteral("ANT")};
+    hl2.rxAntenna = QStringLiteral("ANT");
+    slice->applyChanges(hl2);
+    menu.setRadioModel(&radio);
+    menu.setSlice(slice);
+    QComboBox* combo = parent.findChild<QComboBox*>(QStringLiteral("panRxAntennaCombo"));
+    if (!combo) {
+        check(false, "one port: the RX ANT combo is discoverable");
+        return;
+    }
+    check(combo->currentData().toString() == QStringLiteral("ANT"),
+          "one RX port, no switch: the combo's current row is the radio's port");
+
+    StationAntennaView view = switchView();
+    QObject owner;
+    radio.addStationAntennaSource(&owner, view.id, [&view]() { return view; },
+                                  [](const QString&, bool) { return QString(); });
+    QCoreApplication::processEvents();
+    const auto field = stationAntennaField(&radio, slice, false);
+    std::printf("  one port: combo current='%s' field='%s'\n",
+                qPrintable(combo->currentText()), field ? qPrintable(field->text) : "");
+    check(field && field->text == QStringLiteral("One"),
+          "one RX port, switch bound: the RX ANT field shows the switch's port");
+    check(combo->currentText() == QStringLiteral("  One"),
+          "one RX port, switch bound: the combo's current row is the switch's port too");
+    check(rowOf(*combo, QStringLiteral("ANT")) >= 0,
+          "and the radio's own port is still listed");
+
+    SliceDelta two;
+    two.rxAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    two.rxAntenna = QStringLiteral("ANT2");
+    slice->applyChanges(two);
+    radio.notifyStationAntennasChanged();
+    QCoreApplication::processEvents();
+    check(!stationAntennaField(&radio, slice, false)
+              && combo->currentData().toString() == QStringLiteral("ANT2"),
+          "two RX ports: the field and the combo keep the radio's port");
+}
+
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
+    testOnePortComboShowsTheSwitch();
     QWidget parent;
     parent.resize(800, 600);
     SpectrumOverlayMenu menu(&parent);

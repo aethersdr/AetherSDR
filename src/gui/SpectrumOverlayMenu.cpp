@@ -1284,6 +1284,15 @@ QString SpectrumOverlayMenu::currentRxAntennaToken() const
     return m_rxAntCmb ? m_rxAntCmb->currentData().toString() : QString();
 }
 
+// The combo key of the first station device that reports an RX position.
+static QString reportedStationRxKey(const QVector<StationAntennaView>& stations)
+{
+    const auto reported = std::find_if(stations.cbegin(), stations.cend(),
+        [](const StationAntennaView& view) { return !view.rxCurrent.isEmpty(); });
+    return reported == stations.cend() ? QString()
+        : stationAntennaComboKey(reported->id, reported->rxCurrent);
+}
+
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
     if (!m_rxAntCmb)
@@ -1338,11 +1347,18 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
                 append(QStringLiteral("ANT2"));
             }
         }
+        // At most one radio RX port (the HL2's "ANT"): that port is always in
+        // use, so the switch's position is the current row, as in the RX ANT
+        // field (stationAntennaField). Nothing reported keeps the radio's.
+        if (!kiwiShown && targetSlice && m_radioModel
+            && radioAntennaCount(*m_radioModel, *targetSlice, false) <= 1) {
+            const QString key = reportedStationRxKey(stations);
+            if (!key.isEmpty()) {
+                cur = key;
+            }
+        }
     } else if (!kiwiShown) {
-        const auto reported = std::find_if(stations.cbegin(), stations.cend(),
-            [](const StationAntennaView& view) { return !view.rxCurrent.isEmpty(); });
-        cur = reported == stations.cend() ? QString()
-            : stationAntennaComboKey(reported->id, reported->rxCurrent);
+        cur = reportedStationRxKey(stations);
     }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
@@ -1439,6 +1455,11 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
         if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
             return;
+        // A station switch may own the current row: let the refresh decide.
+        if (m_radioModel && !m_radioModel->stationAntennaViews().isEmpty()) {
+            refreshAntennaCombo();
+            return;
+        }
         m_updatingFromModel = true;
         setRxAntennaComboToken(ant);
         m_updatingFromModel = false;
