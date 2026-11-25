@@ -11380,6 +11380,9 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 qDebug() << "applyPanLayout: closing pan" << panId;
                 return m_radioModel.removePanadapter(panId);
             });
+        if (PanLayoutShrinkPolicy::keepsArrangement(outcome)) {
+            return;  // every close refused; the pans and their arrangement are unchanged
+        }
         const QString reflowId = PanLayoutShrinkPolicy::reflowLayout(layoutId, needed, outcome.survivors);
 
         // Pan removal and slot rekeying arrive asynchronously. Reflow now and

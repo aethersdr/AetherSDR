@@ -48,6 +48,13 @@ inline QString defaultLayoutForCount(int panCount)
     }
 }
 
+// Nothing closed: the pans and their arrangement are what they were, so
+// there is nothing to reflow and the operator's arrangement is kept.
+inline bool keepsArrangement(const Outcome& outcome)
+{
+    return outcome.closed.isEmpty();
+}
+
 // The requested layout when its count was reached, else the default layout
 // for the pans that are left: never cells for a count that does not exist.
 inline QString reflowLayout(const QString& requested, int needed, int survivors)

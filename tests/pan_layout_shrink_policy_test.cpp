@@ -82,9 +82,11 @@ int main()
         const auto outcome = shrink(model, three, 1);
         check(outcome.closed.isEmpty() && outcome.survivors == 3,
               "every close refused: no pan counts as closed");
+        check(PanLayoutShrinkPolicy::keepsArrangement(outcome),
+              "and the operator's arrangement is kept: nothing is reflowed");
         check(PanLayoutShrinkPolicy::reflowLayout(QStringLiteral("1"), 1, outcome.survivors)
                   == QStringLiteral("2h1"),
-              "and the survivors are reflowed for the 3 pans that exist, not the 1 requested");
+              "reflowLayout itself names the 3-pan default for them, never the 1 requested");
     }
     {
         Model model;
@@ -92,7 +94,8 @@ int main()
         const auto outcome = shrink(model, three, 1);
         check(outcome.closed == QStringList{QStringLiteral("p1")} && outcome.survivors == 2
                   && PanLayoutShrinkPolicy::reflowLayout(QStringLiteral("1"), 1, 2)
-                         == QStringLiteral("2v"),
+                         == QStringLiteral("2v")
+                  && !PanLayoutShrinkPolicy::keepsArrangement(outcome),
               "two refused of three: one closes, the two left get a two-pan layout");
     }
     {
