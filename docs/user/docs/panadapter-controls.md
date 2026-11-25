@@ -96,6 +96,7 @@ Center Lock keeps a panadapter centered on one slice as it tunes, independently 
 - With one slice on the pan, the menu item reads **Center Lock Slice A** (checkable).
 - With several slices, a **Center Lock** submenu lists them, active slice first.
 - The lock survives band changes. When it is released, the pan shows "Center Lock released".
+- Closing the pan (its ✕ or **Close Active Panadapter**) forgets its lock. A close that is refused, for example the TX pan while transmitting on the Hermes-Lite 2, keeps the lock.
 - It can also be toggled from a keyboard shortcut (**Center Lock Active Slice**), MIDI, FlexControl and RC-28.
 
 > **Upgrading from an older version:** Center Lock replaces the title-bar Pan Lock button.

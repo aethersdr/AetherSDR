@@ -554,6 +554,11 @@ private:
     // Field::TxAntenna: "ANT" or "RF1". Every outcome republishes the actual
     // route on every slice; a refusal also raises configurationWarning.
     ReceiveDispatch requestTxRoute(const QString& token);
+    // The same condition requestTxRoute() refuses on: the tail counts.
+    bool transmitPathBusy() const override
+    {
+        return m_keyed || m_radioPtt || m_tuning || m_txTailPending;
+    }
     void applyTxRoute(hl2::TxRoute next);
     void refuseTxRoute(const QString& why);
     void onMetisTxRouteRefused(int actual);
@@ -821,6 +826,12 @@ private:
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
     // Re-run one receiver's tune after its RIT changed.
     void retuneReceiver(int ddc);
+    // After transmit moved without setTxSlice(): the new owner's tune, mode and
+    // TX passband reach the transmitter.
+    void handTransmitToOwner();
+    // handTransmitToOwner() once nothing keys the radio: a keyed TX receiver
+    // whose DSP failed owes it (m_txHandoverOwed) until the unkey.
+    void settleTxHandover();
     // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
     [[nodiscard]] static int clampRitXit(const char* what, int hz);
     // qCInfo naming the receiver and slice an RIT/XIT change landed on.
@@ -1269,6 +1280,8 @@ private:
     int m_txTailHoldMs = kTxTailHoldMs;
     QTimer* m_txTailTimer = nullptr;
     bool m_txTailPending = false;
+    // A hand-off to the new TX owner waits for the unkey (settleTxHandover()).
+    bool m_txHandoverOwed = false;
     // The drive register holds a tune level; the operator's RF drive is owed
     // once no tune carrier or tail is radiating.
     bool m_rfDriveOwed = false;

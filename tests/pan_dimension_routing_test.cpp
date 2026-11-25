@@ -188,14 +188,32 @@ int main(int argc, char** argv)
     keyedTxPanClose(QStringLiteral("flex"), true, false,
                     "Flex caps (Allowed), keyed: the TX pan's close proceeds unchanged");
     {
-        // The two GUI closes clear a pan's center lock (and its saved intent)
-        // before the close; a refused keyed close must keep it.
+        // Source pin (MainWindow cannot be constructed in a test): pan_close
+        // and the title-bar X close through the helper that forgets the Center
+        // Lock only once removePanadapter() accepts; pan_close_center_lock_test
+        // covers the helper's behaviour (#7584).
         QFile actions(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_ControlActions.cpp"));
         QFile wiring(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
-        const QByteArray gate = "if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);";
-        check(actions.open(QIODevice::ReadOnly) && wiring.open(QIODevice::ReadOnly)
-                  && actions.readAll().count(gate) == 1 && wiring.readAll().count(gate) == 1,
-              "pan_close and the title-bar X keep the center lock when the model refuses the close");
+        const bool read = actions.open(QIODevice::ReadOnly) && wiring.open(QIODevice::ReadOnly);
+        const QByteArray actionsCode = actions.readAll();
+        const QByteArray wiringCode = wiring.readAll();
+        const QByteArray route = "closePanForgettingCenterLock(panId);";
+        const QByteArray early = "clearCenterLockForPan(panId, true);";
+        check(read && actionsCode.count(route) == 1 && wiringCode.count(route) == 1
+                  && !actionsCode.contains(early) && !wiringCode.contains(early)
+                  && wiringCode.contains("PanCloseCenterLock::closeThenForget(")
+                  && wiringCode.contains("return m_radioModel.removePanadapter(id);"),
+              "pan_close and the title-bar X forget the center lock only through the accepted close");
+        // The helper itself: nothing is cleared before the close, the live lock
+        // is forgotten after it, and a changed saved intent is persisted.
+        const qsizetype helperAt = wiringCode.indexOf("bool MainWindow::closePanForgettingCenterLock(");
+        const QByteArray helper = helperAt < 0 ? QByteArray()
+            : wiringCode.mid(helperAt, wiringCode.indexOf("\n}\n", helperAt) - helperAt);
+        const qsizetype closeAt = helper.indexOf("PanCloseCenterLock::closeThenForget(");
+        check(closeAt > 0 && !helper.left(closeAt).contains("clearCenterLockForPan(")
+                  && helper.indexOf("clearCenterLockForPan(id);", closeAt) > closeAt
+                  && helper.contains("if (savedChanged) {\n        saveCenterLockSettings();"),
+              "the close helper clears nothing before the close, forgets the live lock after it, and saves a changed intent");
     }
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
     check(source.open(QIODevice::ReadOnly), "GUI dimension source readable");

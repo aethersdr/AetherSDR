@@ -376,6 +376,7 @@ signals:
     // both branches of that callback; RadioSetupDialog uses it to reconcile
     // the Network-tab toggle. MainWindow persists the result independently.
     void automationBridgeStartResult(bool ok);
+    void agentActivityChanged(const QString& text, const QString& agent);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -542,6 +543,7 @@ private:
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
     // as pans appear, and those sites must seed a new menu with the current
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
+    bool panWnbSupported() const;
     void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
     // AppSettings key for a pan's persisted RF gain, scoped by radio family:
@@ -1467,7 +1469,8 @@ private:
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
-    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch; read-only, changes nothing on it
+    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch (web socket, port 80)
+    class MicrohamTrioRadioLink* m_trioLink = nullptr;   // its ports in the antenna menus
     Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP or UDP on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS
@@ -2033,7 +2036,6 @@ private:
     void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
-    QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_bandStackIndicator{nullptr};
@@ -2481,6 +2483,8 @@ private:
                              bool persist = true);
     void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
+    // Operator close: forgets the pan's Center Lock only if the model accepts it.
+    bool closePanForgettingCenterLock(const QString& panId);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
     // MultiFlex instances don't inherit or clobber each other's lock intent.

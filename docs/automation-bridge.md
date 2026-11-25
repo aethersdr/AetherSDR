@@ -152,7 +152,7 @@ contributors to self-verify UI changes before requesting review.
 2. Launch through `app_instance` (recommended for a fresh proof build), or
    manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** (25 typed tools): process handoff — `app_instance`;
+**Typed tools.** Activity reporting — `set_agent_activity`; process handoff — `app_instance`;
 introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
@@ -174,6 +174,28 @@ primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `txwaterfall` display toggle, and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
+
+**Agent activity.** Before driving AetherSDR through MCP or Computer Use, send
+a short phrase such as “Testing meters”. Include what you are checking when it fits. For example, call
+`set_agent_activity({"text":"Reading the meters to check which signal levels are available."})`.
+When the step changes, call
+`set_agent_activity({"text":"Tuning Slice A to 14.105 MHz and checking the readback."})`.
+Short labels such as “Testing tuning” also work. Finish with
+`set_agent_activity({"text":""})`. Existing radio notices take priority.
+The wrapper pins the app instance and holds a local connection for the claim.
+On success, `expiresInMs` gives the remaining claim lifetime in milliseconds
+while active. The wrapper releases its pin at expiry or on a failed connection
+to that instance. The next call resolves the currently selected app.
+With the raw bridge, send `{"cmd":"agentActivity","text":"Testing meters"}`
+on a connection you keep open. The same connection can replace or clear the
+text. A competing caller receives `busy`. Closing the owner connection,
+stopping the bridge, or five minutes without an explicit owner report clears the
+badge and notice. For a long step, repeat its text before the deadline. Other
+tool calls leave the deadline unchanged. The bridge strips Unicode control and format
+characters, including bidi and zero-width controls, simplifies whitespace, and displays the first 64 Unicode
+code points. Only an explicitly empty string releases the claim. Nonempty input
+that leaves no display text returns an error and preserves the current report.
+Observe-only sessions cannot claim the indicator.
 
 **Prompts and resources.** The server also exposes an MCP **prompt**,
 `validate_ui_change` (the loop below as a guided workflow — pass your
@@ -1302,7 +1324,14 @@ the engine's reason, publishes no levels, and does not key. A capture that arms
 but returns no audio is reported as a missing receive-audio path, not as a
 quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
 `sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
-and does not key its second leg.
+and does not key its second leg. Its probe uses at most 5% drive and respects both
+the starting drive and the bridge ceiling. The DSP check needs a fresh keyed
+TX:MICPEAK sample. Carrier suppression uses fresh forward watts from the silent
+key. Missing readings are reported as `null`. The lifecycle stage records the
+peak sample amplitude across the output channels during transmit, including
+zero for a continuing stream of digital silence. Icom MONI returns transmitter
+monitor audio. The sideband stage on Icom leaves MONI alone and requests
+verification on a separate receiver.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -1317,7 +1346,7 @@ keyed ones. With bridge TX permission off, every key is refused and counted in
 | `squelch-scale` | Parks the dial 1.5 kHz below the `sql=` carrier (default: the RX reference carrier), finds the lowest level that drops the operator's audio by 20 dB, confirms it at ±1 level, and compares the published line there with the carrier's pan peak. If Auto SQL is published, it repeats the search on band noise 10 kHz away. | the line is more than 6 dB from the carrier, or Auto's widest margin is below the noise gate |
 
 `squelch-scale` is `INCONCLUSIVE` for a carrier above S9 (−73 dBm), for one that
-fades during the search, and when there is no audio with squelch open. Both squelch
+fades during the search, for a peak at the pan floor, and when there is no audio with squelch open. Both squelch
 stages decline while the RX applet's SQL button reads AUTO, because Auto SQL rewrites
 the slice on every pan frame; when the button can't be found, the report says the
 state was not observable. `freqMhz` and `sql=` take `tune`'s validation (finite,
@@ -5320,10 +5349,11 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 83 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 84 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
+| `agentActivity` | — | Report operator-visible activity on a held connection (JSON text, empty to release) |
 | `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |

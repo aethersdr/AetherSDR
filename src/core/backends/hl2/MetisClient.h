@@ -495,10 +495,9 @@ public:
     [[nodiscard]] std::uint64_t cwLateKeyUps() const noexcept { return m_cwLateKeyUps; }
     // The current over's shift, in EP2 samples (I/O thread).
     [[nodiscard]] std::int64_t cwShiftSamples() const noexcept { return m_cwShiftSamples; }
-    // The on-air instant of the last scheduled key-up, or epoch zero. An
-    // atomic, so the GUI thread may read it: Hl2Backend's break-in hang waits
-    // for it, because a shifted key-up reaches the wire later than its instant
-    // plus the lead.
+    // The on-air instant of the last key-up placed on EP2 (scheduled, or the
+    // frame a late one is applied in), or epoch zero. An atomic, so the GUI
+    // thread may read it: Hl2Backend's break-in hang counts from it.
     [[nodiscard]] std::chrono::steady_clock::time_point cwScheduledUpOnAir() const noexcept
     {
         return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(
@@ -1143,6 +1142,8 @@ private:
     bool insertCwEdge(const CwScheduledEdge& edge);
     void scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation, bool release,
                          const TxCoordinator::Completion& completion);
+    // The wire instant of EP2 sample `sample`, published for the break-in hang.
+    void publishCwUpOnAir(std::int64_t sample) noexcept;
     // Unscheduled key-downs still held (a straight key, a TCI keyer hold),
     // each by its original operation and so its producer's intent. The
     // carrier is m_cwKeyDown (the scheduled elements') or any hold. The model

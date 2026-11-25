@@ -48,6 +48,10 @@ public:
         cert.stageLifecycle(o);
     }
     static int keyRefusals(const RadioCertification& cert) { return cert.m_keyRefusals; }
+    static void dspLiveness(RadioCertification& cert, const RadioCertification::Options& o)
+    {
+        cert.stageDspLiveness(o);
+    }
     static void meterScale(RadioCertification& cert, const RadioCertification::Options& o)
     {
         cert.stageMeterScale(o);
@@ -215,6 +219,27 @@ void testMeterScaleStage()
           "meter-scale stage: no saturation concern from a leftover");
     check(m.value(QStringLiteral("keyConfirmed")).toBool(true) == false,
           "meter-scale stage: the report says the key was not confirmed");
+}
+
+void testDspLivenessRefused()
+{
+    RadioModel radio;
+    AudioEngine audio;
+    RadioCertification cert(&radio, &audio);
+    RadioCertification::Options options;
+    options.settleMs = 0;
+
+    MeterModel& meters = radio.meterModel();
+    defineMeter(meters, 1, "TX", "MICPEAK", "dBFS");
+    meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("MICPEAK"), -20.0f);
+    RadioCertificationTestAccess::dspLiveness(cert, options);
+    const QJsonObject stage = stageNamed(cert, QStringLiteral("dsp-liveness"));
+    const QJsonObject measured = stage.value(QStringLiteral("measured")).toObject();
+    check(measured.value(QStringLiteral("keyConfirmed")).toBool(true) == false,
+          "DSP liveness reports a refused key");
+    check(measured.value(QStringLiteral("micPeakDbfs")).isNull()
+              && stage.value(QStringLiteral("concern")).toString().contains(QStringLiteral("INCONCLUSIVE")),
+          "an idle mic peak cannot establish audio reached the transmitter");
 }
 
 // Runs the three audio stages and returns them by id. The engine is never
@@ -398,6 +423,7 @@ int main(int argc, char** argv)
     testLifecycleKeyRefusedWithAudio();
     testMeterScaleJudgement();
     testMeterScaleStage();
+    testDspLivenessRefused();
 
     std::printf("\n%d checks failed\n", failures);
     return failures == 0 ? 0 : 1;

@@ -895,6 +895,62 @@ static void testBackendHangWaitsForTheShiftedKeyUp()
           "backend: the hang ends after the shifted key-up's wire instant plus the delay");
 }
 
+// #7570 lead 2: a keyer stop that reaches the writer after its stop instant is
+// applied at once, at the frame being built, and replaces the element's
+// pending release. The published on-air instant must be that frame's, not the
+// removed release's, or the break-in hang holds MOX until the stale release.
+// Lead 0, so the stop's sample is its instant; a 500 ms dah stopped at 150 ms
+// and delivered at 200 ms.
+static void testBackendHangFollowsALateKeyerStop()
+{
+    TxTestAuthority tx;
+    Hl2Backend backend;
+    const Clock::time_point t0 = Clock::now();
+    Hl2TxGateTestAccess::prepare(backend, t0);
+    backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.set"), 0,
+                            QVariantMap{{QStringLiteral("edgeLeadMs"), 0}});
+    const int delayMs = 20;
+    const auto edge = [&](bool down, std::int64_t ms, std::int64_t releaseMs) {
+        CwControlRequest request{CwControlRequest::Kind::Carrier, down, true, delayMs,
+                                 t0 + std::chrono::milliseconds(ms), QStringLiteral("test"), 0, 0};
+        if (releaseMs >= 0) {
+            request.releaseAt = t0 + std::chrono::milliseconds(releaseMs);
+        }
+        return backend.requestCwControl(request, TxCoordinator::Command{tx.operation, down, {}});
+    };
+    (void)edge(true, 100, 600);
+    std::vector<int> iTrace;
+    while (static_cast<std::int64_t>(iTrace.size()) < samplesOfMs(200)) {
+        appendI(Hl2TxGateTestAccess::packet(backend), iTrace);   // the stop arrives after its instant
+    }
+    const std::int64_t frameMs = Hl2TxGateTestAccess::frameMs(backend);
+    (void)edge(false, 600, 150);
+    check(Hl2TxGateTestAccess::pending(backend) == 0,
+          "late keyer stop: the element's pending release is removed");
+    const auto frameOnAir = t0 + std::chrono::milliseconds(frameMs);
+    const auto onAir = Hl2TxGateTestAccess::upOnAir(backend);
+    check(onAir > frameOnAir - std::chrono::milliseconds(3) && onAir < frameOnAir + std::chrono::milliseconds(3),
+          "late keyer stop: the published key-up instant is the frame it is applied in, not the removed release");
+    while (static_cast<std::int64_t>(iTrace.size()) < samplesOfMs(700)) {
+        appendI(Hl2TxGateTestAccess::packet(backend), iTrace);
+    }
+    const auto runs = carriers(iTrace);
+    check(runs.size() == 1 && within(runs[0].start + runs[0].length, samplesOfMs(frameMs), kFrame),
+          "late keyer stop: the carrier ends at the frame the stop is applied in");
+    const auto waitUntil = [](Clock::time_point t) {
+        QEventLoop loop;
+        const auto ms = std::chrono::ceil<std::chrono::milliseconds>(t - Clock::now()).count();
+        QTimer::singleShot(static_cast<int>(std::max<std::int64_t>(0, ms)), &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    // The stale release's hang would end at t0 + 600 + delay; the stop's at
+    // about t0 + 200 + delay.
+    waitUntil(frameOnAir + std::chrono::milliseconds(delayMs + 200));
+    check(!Hl2TxGateTestAccess::cwAutoKeyed(backend),
+          "late keyer stop: the hang ends after the stop's wire instant plus the delay, not the removed release's");
+    AppSettings::instance().remove(QStringLiteral("Hl2"));   // cwlead.set stored it
+}
+
 // #5065 review 1: a keyer stopped mid-element sends its key-up with the
 // element's deadline as scheduledAt (as on main, for every other backend) and
 // the stop instant in releaseAt. The HL2 keys up at the stop; without it, at
@@ -1185,6 +1241,7 @@ int main(int argc, char** argv)
     testLeadChangedDuringAnOverAppliesToTheNext();
     testBackendLeadVerbsPersist();
     testBackendHangWaitsForTheShiftedKeyUp();
+    testBackendHangFollowsALateKeyerStop();
     testBackendKeysUpAtAKeyerStop();
     testRefusedOverRaisesOneNotice();
     std::printf("%d checks, %d failed\n", g_checks, g_failures);

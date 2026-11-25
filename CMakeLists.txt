@@ -1380,6 +1380,7 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
     src/models/MicrohamTrioModel.cpp
+    src/models/MicrohamTrioRadioLink.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
     src/models/FirmwareInstallModel.cpp
@@ -1444,6 +1445,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
+    src/gui/AgentControlBadge.h
     src/gui/StatusBarMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/WindowRepaintScheduler.cpp

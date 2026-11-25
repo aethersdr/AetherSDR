@@ -15,6 +15,7 @@
 
 #include "MainWindowHelpers.h"
 #include "StatusBarLayout.h"
+#include "AgentControlBadge.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
@@ -2709,6 +2710,12 @@ MainWindow::~MainWindow()
     m_shortcutTooltips = nullptr;
 
     preparePanadapterUiForShutdown();
+
+    // ~AutomationServer clears a held agent claim, and the status-row slot reads
+    // members that are gone by the time m_automation is destroyed.
+    if (m_automation)
+        QObject::disconnect(m_automation.get(), &AutomationServer::agentActivityChanged,
+                            this, &MainWindow::agentActivityChanged);
 
     // KiwiSDR profile clients are QObject children, but their disconnect path emits
     // state changes that are wired back into MainWindow and AudioEngine. Tear
@@ -6127,27 +6134,15 @@ void MainWindow::buildUI()
         return sep;
     };
 
-    // Automation indicator chip — visible ONLY when the agent automation bridge
-    // is active (AETHER_AUTOMATION). Uses the canonical AppSettings automation
-    // agent name so the chip and tooltip match the identity announced to the
-    // radio. Legacy environment names are resolved by AppSettings. (#3646)
-    // Kept deliberately separate from the station-nickname label so it never
-    // fights radio status updates.
-    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-        const QString agent = AppSettings::instance().automationAgentName();
-        m_automationChip = new QLabel(QStringLiteral("\U0001F916 ") + agent);
-        m_automationChip->setObjectName(QStringLiteral("automationChip"));
-        m_automationChip->setAccessibleName(
-            QStringLiteral("Agent automation bridge active: %1").arg(agent));
-        m_automationChip->setStyleSheet(
-            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
-            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
-        m_automationChip->setToolTip(
-            QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
-                .arg(agent));
-        hbox->addWidget(m_automationChip);
-        addSep();
-    }
+    auto* orbit = new AgentControlBadge(m_statusBarContainer);
+    hbox->addWidget(orbit);
+    connect(this, &MainWindow::agentActivityChanged, orbit,
+            [this, orbit](const QString& activity, const QString& agent) {
+                const bool wasHidden = orbit->isHidden();
+                orbit->showActivity(activity, agent);
+                if (wasHidden != orbit->isHidden())
+                    updateStatusBarMinimumWidth();
+            });
 
     // Hidden connection state label (used by connect/disconnect logic)
     m_connStatusLabel = new QLabel("", this);
@@ -8598,6 +8593,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
 }
 
+bool MainWindow::panWnbSupported() const
+{
+    if (!m_radioModel.isConnected()) { return true; }
+    const auto controls = m_radioModel.backendCapabilities().panDisplayControl;
+    return controls && controls->supports(PanDisplayField::Wnb)
+        && controls->supports(PanDisplayField::WnbLevel);
+}
+
 // Takes the WIDGET, not just its menu, because the waterfall auto-black gate has
 // to reach both and they must never disagree about whether HW exists — the menu
 // decides what the button shows, the widget decides what actually renders.
@@ -8609,7 +8612,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
-        menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
+        menu->setWnbAvailability(m_radioModel.hasRadioSideDsp(), panWnbSupported());
         // The Black Level button's HW position, which is a radio-side display
         // computation rather than radio-side audio DSP — so it needs its own
         // capability, not a ride on hasRadioSideDsp. (#4606)

@@ -33,6 +33,7 @@
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
+#include "PanCloseCenterLock.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #include "ReceiveCaptureAction.h"
@@ -67,6 +68,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "models/MicrohamTrioRadioLink.h"
 #include "core/SpeConnection.h"
 #include "core/SpeLegacyProtocol.h"
 #include "core/SpeProtocol.h"
@@ -118,10 +120,12 @@ namespace AetherSDR {
 void MainWindow::wireStatusBarMessages()
 {
     auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    connect(this, &MainWindow::agentActivityChanged,
+            messageOverlay, &StatusBarMessageOverlay::setAgentActivity);
     ThemeManager::instance().applyStyleSheet(
         messageOverlay,
         QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
-                       " background: {{color.background.1}}; font-size: 12px;"
+                       " qproperty-activityDotColor: {{color.canon.cyan}}; background: {{color.background.1}}; font-size: 12px;"
                        " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
@@ -662,6 +666,27 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
 
     m_centerLockSliceByPan.remove(panId);
     syncCenterLockUi(panId);
+}
+
+bool MainWindow::closePanForgettingCenterLock(const QString& panId)
+{
+    const QString id = panId;   // the caller's string can die with the pan's widget
+    const SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(id) : nullptr;
+    const PanCloseCenterLock::Slot slot{centerLockRadioKey(), sw ? sw->panIndex() : -1,
+                                        m_centerLockSessionOnlyPans.contains(id)};
+    bool savedChanged = false;
+    const bool accepted = PanCloseCenterLock::closeThenForget(
+        slot, m_centerLockSliceLetterByRadioPanIndex,
+        [this, &id] { return m_radioModel.removePanadapter(id); },
+        [this, &id] {
+            m_centerLockRebind.cancel(id);
+            clearCenterLockForPan(id);
+        },
+        savedChanged);
+    if (savedChanged) {
+        saveCenterLockSettings();
+    }
+    return accepted;
 }
 
 void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
@@ -4456,12 +4481,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
-        // A keyed close of the TX pan is refused (with a Notice): keep its lock.
-        if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);
-        // Single source of truth for teardown: removePanadapter sends the
-        // FlexLib-correct "display pan remove" + "display panafall remove"
-        // pair, so a panafall-created pan also frees its waterfall. (#3843)
-        m_radioModel.removePanadapter(panId);
+        // removePanadapter sends "display pan remove" + "display panafall
+        // remove", so a panafall-created pan also frees its waterfall (#3843).
+        closePanForgettingCenterLock(panId);
     });
 
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────
@@ -7698,12 +7720,19 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
-    // The Peripherals page shows its state and labels; nothing here changes
-    // anything on it. Its session is taken at startup only with "Connect
-    // automatically" on, like the KPA500/KAT500 rows.
+    // ── microHAM Trio antenna switch ──────────────────────────────────────
+    // The Peripherals page shows its state and labels; the link below sends
+    // the antenna picks made in RX ANT / TX ANT to it. Its session is taken at
+    // startup only with "Connect automatically" on, like the KPA500/KAT500 rows.
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
+    // The Trio is told which radio is connected (the Peripherals page reads and
+    // stores that radio's port on it), and its antenna ports are offered in
+    // the RX ANT / TX ANT menus beside the radio's own.
+    m_trioLink = new MicrohamTrioRadioLink(&m_radioModel, &m_trioModel, this);
+    connect(&m_trioModel, &MicrohamTrioModel::notice, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
 
     // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
