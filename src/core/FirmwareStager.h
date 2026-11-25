@@ -59,6 +59,44 @@ public:
     // line and not a full list.
     static QStringList parseAllReleases(const QByteArray& json);
 
+    // ─── Finding FlexRadio's MD5 for one release (#7421) ────────────────────
+    //
+    // FlexRadio uploads each release's hash file into its own timestamped
+    // folder and attaches it to that release's software record. Finding it is
+    // therefore three reads, each a pure function of untrusted input
+    // (Principle VII), exposed so the tests can pin them without a network:
+    //
+    //   software index --releasePostId()--> post id
+    //   media?parent=id --selectMd5HashUrl()--> hash-file URL
+    //   hash file --parseMd5HashFile()--> MD5 of the installer we download
+    //
+    // Every step matches the release EXACTLY and answers empty rather than
+    // guess: a release is never verified against another release's hash.
+
+    // The WordPress post id of the record for exactly `version` ("4.3.19"),
+    // or 0 when the index names no such release. Uses the same title/slug
+    // rules as parseAllReleases(), so "a release" means one thing.
+    static qint64 releasePostId(const QByteArray& indexJson, const QString& version);
+
+    // The URL of `version`'s hash file among a release record's media
+    // attachments, or empty. `arch` is the installer's architecture tag
+    // ("x64"), or empty for pre-4.2 .exe releases, whose hash file has none.
+    // The file name must match exactly (case aside: 4.2.18 spells "ARM64"),
+    // the URL must be https on flexradio.com, and two different matches are
+    // treated as no match.
+    static QString selectMd5HashUrl(const QByteArray& mediaJson, const QString& version,
+                                    const QString& arch);
+
+    // The lowercase MD5 the hash file records for `installerFileName`, or
+    // empty. The file names the installer it covers ("[001/001]
+    // SmartSDR_v4.3.19_x64.msi"), and that name must be the one we download,
+    // so the hash and the installer cannot drift apart.
+    static QString parseMd5HashFile(const QByteArray& body, const QString& installerFileName);
+
+    // The installer file name for `version`, as FlexRadio publishes it and as
+    // it is cached in the staging directory.
+    static QString installerFileName(const QString& version);
+
     // Download installer, verify, extract .ssdr for the given model family
     // modelFamily: "6x00" or "9600"
     void downloadAndStage(const QString& version, const QString& modelFamily);
@@ -134,6 +172,21 @@ private:
     // 1 MiB against a real answer of ~2 KB: `_fields` trims each record to its
     // title and slug, and `per_page=100` caps how many there can be.
     static constexpr qint64 kMaxSoftwareIndexBytes = 1 * 1024 * 1024;
+    // A real hash file is ~250 bytes.
+    static constexpr qint64 kMaxHashFileBytes = 64 * 1024;
+
+    // GET `url` and hand back its body, or an empty body and a reason. Refuses
+    // a body over `maxBytes`. Drops the answer if a newer download, or a
+    // cancel, has begun since the request was made.
+    void getBounded(const QUrl& url, qint64 maxBytes,
+                    std::function<void(const QByteArray& body, const QString& error)> done);
+
+    // Steps 2a-2c: index -> media -> hash file. `done` receives the MD5, or
+    // an empty string plus the step that failed.
+    void fetchExpectedMd5(const QString& version,
+                          std::function<void(const QString& md5, const QString& error)> done);
+    // Step 2d: use the cached installer if it matches, else download it.
+    void downloadInstaller(const QString& version);
 
     QNetworkAccessManager m_nam;
     QString         m_stagingDirectory;
@@ -144,18 +197,27 @@ private:
     QString         m_targetVersion;
     QString         m_stagedPath;
     QString         m_stagedVersion;
+    // Why the hash is missing, for the status line; empty when it was found.
+    QString         m_md5Unavailable;
     bool            m_cancelled{false};
     bool            m_stagedVerified{false};
+    // Bumped by every downloadAndStage() and cancel(), so an answer to an
+    // earlier attempt cannot act on a later one.
+    quint64         m_downloadGeneration{0};
+
+    // The one architecture the updater downloads. It names the MSI, the cached
+    // file and the hash file, so the three cannot drift apart (#7421).
+    static constexpr const char* kInstallerArch = "x64";
 
     // v4.1.x and earlier: InnoSetup self-extracting .exe.
     // v4.2+: WiX 6 MSI (OLE Compound File with embedded LZX-compressed CABs).
-    static constexpr const char* INSTALLER_URL_FMT_EXE =
-        "https://smartsdr.flexradio.com/SmartSDR_v%1_Installer.exe";
-    static constexpr const char* INSTALLER_URL_FMT_MSI =
-        "https://smartsdr.flexradio.com/SmartSDR_v%1_x64.msi";
-    static constexpr const char* MD5_URL_FMT =
-        "https://edge.flexradio.com/www/offload/20251215133656/"
-        "SmartSDR-v%1-Installer-MD5-Hash-File.txt";
+    // Both are installerFileName() under this host.
+    static constexpr const char* INSTALLER_URL_BASE = "https://smartsdr.flexradio.com/";
+    // The media attached to one software record: for v4.3.19 its x64 and
+    // arm64 hash files and the FlexLib zip.
+    static constexpr const char* MEDIA_URL_FMT =
+        "https://www.flexradio.com/wp-json/wp/v2/media"
+        "?parent=%1&per_page=100&_fields=source_url";
     // FlexRadio's own WordPress REST index of published software -- what
     // SmartSDR and Maestro read. Structured records rather than the marketing
     // page at /software/, which this used to scrape.
@@ -164,10 +226,11 @@ private:
     // too, so fonts come back and the parse filters by title). `per_page=100`
     // takes the whole set in one request: x-wp-total is 15 today, so there is
     // no pagination to follow. `_fields` trims each record to what is read,
-    // which is the difference between a ~2 KB answer and a ~43 KB one.
+    // which is the difference between a ~2 KB answer and a ~43 KB one. `id`
+    // is what the media lookup for a release's hash file needs.
     static constexpr const char* SOFTWARE_INDEX_URL =
         "https://www.flexradio.com/wp-json/wp/v2/software"
-        "?search=SmartSDR&per_page=100&_fields=slug,title";
+        "?search=SmartSDR&per_page=100&_fields=id,slug,title";
 };
 
 } // namespace AetherSDR
