@@ -11,9 +11,10 @@ name: Update Manifest
 #          is shown to hold exactly the payload's files. macOS's payload and
 #          `full` is the app tarball the macOS DMG build attached (Phase 4),
 #          with the DAX driver's source hash (hal-plugin/ at the tag).
-# publish  runs in the update-signing environment (main and v* refs only, no
-#          approval): signs both manifests with the Ed25519 update
-#          key, verifies each signature against packaging/update-signing.pub,
+# publish  runs in the update-signing environment (the main branch only, no
+#          approval) and runs only code fetched at the workflow's commit,
+#          never the build artifact's: signs both manifests with the Ed25519
+#          update key, verifies each signature against packaging/update-signing.pub,
 #          puts the bundles where manifest-v2.json names them (the release, or
 #          updates.aethersdr.com with UPDATE_PAYLOAD_BASE=r2) and puts both
 #          manifests on updates.aethersdr.com (an R2 bucket written only
@@ -58,7 +59,7 @@ jobs:
   build:
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion) &&
+      (contains(fromJSON('["success", "failure", "cancelled", "timed_out"]'), github.event.workflow_run.conclusion) &&
        contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
@@ -246,11 +247,16 @@ jobs:
             if [ "$EVENT_NAME" = workflow_run ]; then
               for w in $missing; do
                 b=$(builder "$w")
-                if [ -n "$b" ] && [ "$(status_of "$b")" != completed ]; then
-                  echo "::notice::Deferred: $b is still running and will start the run that builds this manifest."
-                  echo "deferred=true" >> "$GITHUB_OUTPUT"
-                  exit 0
-                fi
+                [ -n "$b" ] || continue
+                # Only a build known to be in flight starts a later run. No run
+                # for the tag, or a failed query, keeps waiting and ends red.
+                case "$(status_of "$b")" in
+                  queued|in_progress|waiting|requested|pending)
+                    echo "::notice::Deferred: $b is still running and will start the run that builds this manifest."
+                    echo "deferred=true" >> "$GITHUB_OUTPUT"
+                    exit 0
+                    ;;
+                esac
               done
             fi
             echo "Waiting for:$missing  ($i/90)"
@@ -300,7 +306,6 @@ jobs:
             --fetch-from-github --depth 4 --work "$RUNNER_TEMP/update-work" \
             --public-key "$RUNNER_TEMP/tool/update-signing.pub" --payload-base "$payload_base" \
             $no_tarballs $macos
-          cp "$RUNNER_TEMP/tool/publish_update_manifest.py" "$RUNNER_TEMP/tool/build_update_manifest.py" update-out/
           ls -l update-out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -330,14 +335,21 @@ jobs:
           name: update-manifest-${{ needs.build.outputs.tag }}
           path: update-out
 
-      - name: Fetch the public key
+      # The artifact is data only: the code that runs beside the key comes
+      # from the workflow's own commit, as the public key does, never from
+      # the build job, which unpacks the release's payloads.
+      - name: Fetch the public key and the publisher
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
-          gh api "repos/$GH_REPO/contents/packaging/update-signing.pub?ref=$WORKFLOW_SHA" \
-            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/update-signing.pub"
+          for f in packaging/update-signing.pub tools/publish_update_manifest.py \
+                   tools/build_update_manifest.py; do
+            gh api "repos/$GH_REPO/contents/$f?ref=$WORKFLOW_SHA" \
+              -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/$(basename "$f")"
+            test -s "$RUNNER_TEMP/$(basename "$f")"
+          done
           openssl pkey -pubin -in "$RUNNER_TEMP/update-signing.pub" -noout
 
       # Sign, then verify against the committed public key before anything
@@ -353,7 +365,7 @@ jobs:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
-          python3 update-out/publish_update_manifest.py validate --tag "$TAG" --dir update-out
+          python3 "$RUNNER_TEMP/publish_update_manifest.py" validate --tag "$TAG" --dir update-out
           key="$RUNNER_TEMP/update-signing.pem"
           trap 'rm -f "$key"' EXIT
           ( umask 077; printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key" )
@@ -374,7 +386,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
-          base=$(python3 update-out/publish_update_manifest.py payload-base --tag "$TAG" --dir update-out)
+          base=$(python3 "$RUNNER_TEMP/publish_update_manifest.py" payload-base --tag "$TAG" --dir update-out)
           echo "Patch bundles: $base"
           if [ "$base" != github ]; then
             exit 0
@@ -404,7 +416,7 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
-          python3 update-out/publish_update_manifest.py publish --tag "$TAG" --latest-tag "$latest" \
+          python3 "$RUNNER_TEMP/publish_update_manifest.py" publish --tag "$TAG" --latest-tag "$latest" \
             --public-key "$RUNNER_TEMP/update-signing.pub" --dir update-out
 
       # What clients see, through the public site: complete, or this fails.
@@ -415,7 +427,7 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
-          state=$(python3 update-out/publish_update_manifest.py check --tag "$TAG" \
+          state=$(python3 "$RUNNER_TEMP/publish_update_manifest.py" check --tag "$TAG" \
             --latest-tag "$latest" --public-key "$RUNNER_TEMP/update-signing.pub")
           echo "Publication of $TAG: $state"
           test "$state" = complete

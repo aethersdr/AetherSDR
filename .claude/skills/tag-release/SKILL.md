@@ -405,7 +405,7 @@ signing run that succeeded. Its read-only `plan` job asks nothing until the
 release is settled: every build and Docs run for the tag finished, no
 signing run unfinished, `SHA256SUMS.txt` newer than every build artifact.
 Then its `offload` job runs in the **update-signing** environment, with no
-approval (main and `v*` refs only). It copies the per-file `.asc`
+approval (the `main` branch only). It copies the per-file `.asc`
 signatures (not `SHA256SUMS.txt.asc`), the symbol archives and the
 `.msixupload` to `updates.aethersdr.com/releases/vX.Y.Z/` and checks each
 one. Only after every copy is checked does it delete them from the page,
