@@ -2466,13 +2466,13 @@ void TciServer::giveUpOwedRoute()
     }
 }
 
-void TciServer::claimOwedRoute(int txSliceId)
+void TciServer::claimOwedRoute(int txSliceId, bool reassertsSplit)
 {
     // A live client used the kept route during the over: it is in use, not
     // owed. The route stays TciCreated, so its own end still reaps the pan
-    // (#7589 note 7). A held split:false is not claimed: that client asked for
-    // the route to end.
-    if (m_owedRouteFinish && !m_owedRouteFinish->confirmation
+    // (#7589 note 7). A held split:false is claimed only by a newer split:true:
+    // any other use of the route leaves that client's "end the route" standing.
+    if (m_owedRouteFinish && (!m_owedRouteFinish->confirmation || reassertsSplit)
         && m_owedRouteFinish->createdSliceId == txSliceId) {
         dropOwedRoute();
     }
@@ -2633,7 +2633,7 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
         const TciRoutingState::RouteDecision route = m_routingState.resolveVfoB(
             rxSlice->sliceId(), routingEndpoints(client), /*vfoBEqualsRx=*/false);
         if (route.action == TciRoutingState::RouteAction::UseExisting) {
-            claimOwedRoute(route.txSliceId);
+            claimOwedRoute(route.txSliceId, /*reassertsSplit=*/true);
             broadcast(confirmation);
             return;
         }
@@ -3077,7 +3077,6 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     const int cachedRx = m_routingState.rxSliceId();
     const char* const cachedOwner = txRouteOwnerName(m_routingState.owner());
     const int txSliceId = m_routingState.resolvePttSlice(rxSlice->sliceId(), endpoints);
-    claimOwedRoute(txSliceId);
 
     // Log the whole PTT routing decision (request, live state, cached route,
     // result) so routing faults can be diagnosed from a log. source= is
@@ -3129,7 +3128,8 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     QPointer<TciServer> self(this);
     QPointer<TciClient> socket(client);
     promoteTxSliceAndContinue(txSliceId,
-        [self, socket, request, txRequest, wantsAudio, daxPermit, transitionGeneration, refuse](bool selected) {
+        [self, socket, request, txRequest, wantsAudio, daxPermit, transitionGeneration, refuse,
+            txSliceId](bool selected) {
         if (!self) {
             return;
         }
@@ -3197,6 +3197,8 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
             if (self) { self->finishRouteTransition(transitionGeneration); }
             return;
         }
+        // Only an admitted key uses the kept route; a refused one leaves it owed.
+        self->claimOwedRoute(txSliceId);
         self->m_tciTxContext = std::move(media);
         if (self->m_tciPttConfirmedOn && wantsAudio) {
             self->startTxChrono(socket, request.trx);

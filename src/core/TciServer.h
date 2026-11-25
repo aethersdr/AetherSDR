@@ -676,7 +676,7 @@ private:
     void startOwedRouteFinish();
     void dropOwedRoute();
     void giveUpOwedRoute();
-    void claimOwedRoute(int txSliceId);
+    void claimOwedRoute(int txSliceId, bool reassertsSplit = false);
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;
