@@ -43,6 +43,12 @@ public:
     {
         return server.handleLine(line, nullptr);
     }
+    static QLocalSocket* disconnectableClient(AutomationServer& server)
+    {
+        auto* client = new QLocalSocket(&server);
+        QObject::connect(client, &QLocalSocket::disconnected, &server, &AutomationServer::onDisconnected);
+        return client;
+    }
     static QTimer* activityTimer(AutomationServer& server) { return server.m_activityTimer; }
     static std::shared_ptr<Wait> addWait(AutomationServer& server)
     {
@@ -151,6 +157,31 @@ void agentActivity()
           "stale owner cannot clear a replacement claim");
     check(ok(report(second, "")) && ok(report(second, "")) && changes.last().isEmpty() && !timer->isActive(),
           "explicit release clears the claim and is repeatable");
+    auto* owner = Access::disconnectableClient(server);
+    auto* observer = Access::disconnectableClient(server);
+    check(ok(report(*owner, "Testing meters")), "disconnect fixture claims");
+    const auto claimTimer = timer->id();
+    observer->disconnected();
+    check(changes.last() == "Testing meters" && timer->id() == claimTimer,
+          "unrelated disconnect preserves the claim and deadline");
+    owner->disconnected();
+    check(changes.last().isEmpty() && !timer->isActive(), "owner disconnect clears activity immediately");
+
+    check(ok(report(first, "Testing tuning")), "new owner can claim after disconnect");
+    check(!ok(report(first, QStringLiteral("\u200b\ufeff"))) && changes.last() == "Testing tuning",
+          "zero-width-only report preserves the previous activity");
+    server.setReadOnly(true);
+    check(changes.last().isEmpty() && !timer->isActive(), "observe-only transition clears the claim");
+    server.setReadOnly(false);
+    check(ok(report(first, "Testing tuning")), "owner can claim after observe-only ends");
+    server.setAuthToken("new-token");
+    check(changes.last().isEmpty() && !timer->isActive(), "token rotation clears the claim");
+    check(errorOf(Access::request(server, QJsonObject{{"cmd", "agentActivity"}}, &first)).startsWith("unauthorized"),
+          "unauthenticated malformed report gets the token error");
+    server.setAuthToken({});
+    check(ok(report(first, "Testing tuning")), "owner can claim before stop");
+    server.stop();
+    check(changes.last().isEmpty() && !timer->isActive(), "stopping the bridge clears the claim");
 }
 
 void interlockProbe()

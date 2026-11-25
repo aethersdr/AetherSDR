@@ -133,8 +133,8 @@ PR in `Static checks` and emits inline diff annotations; it is warning-only.
 ## Agent Automation Bridge — verify the GUI without pixels
 
 Before driving AetherSDR through MCP or Computer Use, call `set_agent_activity`
-with up to 64 characters describing the test, for example “Tuning Slice A to
-14.105 MHz and checking the readback.” Update when the step changes. For a
+with a short phrase such as “Testing meters” or “Testing tuning” (up to 64
+characters). Update when the step changes. For a
 long step, repeat the report before five minutes elapse. Send an empty string
 when finished.
 

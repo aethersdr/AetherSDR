@@ -10,10 +10,12 @@ namespace AetherSDR {
 // A static text label with a painted Orbit mark. Its full name remains
 // available through QLabel's accessible interface even when visually elided.
 class AgentControlBadge final : public QLabel {
+    Q_OBJECT
 public:
     explicit AgentControlBadge(QWidget* parent)
         : QLabel(parent)
     {
+        // Keep the bridge selector used by existing automation scripts.
         setObjectName(QStringLiteral("automationChip"));
         setTextFormat(Qt::PlainText);
         setFixedSize(136, 27);

@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QStyleHints>
 #include <QVariantAnimation>
+#include <QWindow>
 #include <QAbstractButton>
 #include <QAbstractSlider>
 #include <QComboBox>
@@ -34,7 +35,7 @@ class StatusBarMessageOverlay : public QLabel {
     Q_PROPERTY(QColor activityDotColor MEMBER m_dotColor)
 public:
     explicit StatusBarMessageOverlay(QStatusBar* bar, QWidget* surface = nullptr)
-        : QLabel(bar->parentWidget()), m_bar(bar), m_surface(surface)
+        : QLabel(bar->parentWidget()), m_bar(bar), m_surface(surface), m_pulse(this)
     {
         setObjectName(QStringLiteral("statusBarMessageOverlay"));
         setTextFormat(Qt::PlainText);
@@ -57,6 +58,7 @@ public:
         connect(QGuiApplication::styleHints()->accessibility(),
                 &QAccessibilityHints::motionPreferenceChanged,
                 this, &StatusBarMessageOverlay::syncPulse);
+        connect(qGuiApp, &QGuiApplication::focusWindowChanged, this, &StatusBarMessageOverlay::syncPulse);
         bar->installEventFilter(this);
         parentWidget()->installEventFilter(this);
         if (m_surface) {
@@ -110,6 +112,13 @@ protected:
     void showEvent(QShowEvent* event) override
     {
         QLabel::showEvent(event);
+        if (QWindow* handle = window()->windowHandle(); handle != m_window) {
+            if (m_window)
+                m_window->removeEventFilter(this);
+            m_window = handle;
+            if (m_window)
+                m_window->installEventFilter(this);
+        }
         syncPulse();
     }
 
@@ -121,6 +130,11 @@ protected:
 
     bool eventFilter(QObject* watched, QEvent* event) override
     {
+        if (watched == m_window) {
+            if (event->type() == QEvent::Expose || event->type() == QEvent::WindowStateChange)
+                syncPulse();
+            return QLabel::eventFilter(watched, event);
+        }
         switch (event->type()) {
         case QEvent::Resize:
         case QEvent::Move:
@@ -140,7 +154,9 @@ private:
 
     void syncPulse()
     {
-        const bool animate = m_showsActivity && isVisible()
+        // Some compositors do not report occlusion. Keep background windows quiet too.
+        const bool animate = m_showsActivity && isVisible() && m_window && m_window->isExposed()
+            && m_window->visibility() != QWindow::Minimized && m_window == QGuiApplication::focusWindow()
             && QGuiApplication::styleHints()->accessibility()->motionPreference()
                    != Qt::MotionPreference::ReducedMotion;
         if (animate && m_pulse.state() != QAbstractAnimation::Running)
@@ -240,6 +256,7 @@ private:
     QPointer<QWidget> m_alternateSurface;
     QTimer m_announcementTimer;
     QColor m_dotColor;
+    QPointer<QWindow> m_window;
     QVariantAnimation m_pulse;
     bool m_showsActivity{};
     QString m_activity;

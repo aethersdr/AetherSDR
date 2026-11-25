@@ -250,6 +250,43 @@ def test_agent_activity_session():
             aether_mcp._close_activity_bridge()
 
 
+def test_agent_activity_pin_cleanup():
+    def claim():
+        aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+
+    owner = Mock(sock_path="/old")
+    owner.request.return_value = {"ok": True, "active": True, "expiresInMs": 300000}
+    with patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/old"}, clear=True), \
+         patch.object(aether_mcp, "Bridge", return_value=owner) as factory, \
+         patch.object(aether_mcp.time, "monotonic", return_value=0) as clock:
+        try:
+            claim()
+            os.environ["AETHER_MCP_SOCKET"] = "/next"
+            clock.return_value = 299
+            check("instance pinned before deadline", aether_mcp.bridge_socket_path() == "/old")
+            clock.return_value = 300
+            check("expiry drops the pin", aether_mcp.bridge_socket_path() == "/next" and owner.close.called)
+            os.environ["AETHER_MCP_SOCKET"] = "/old"
+            claim()
+            os.environ["AETHER_MCP_SOCKET"] = "/next"
+            factory.side_effect = ConnectionRefusedError()
+            try:
+                _REAL_BRIDGE_REQUEST({"cmd": "get", "model": "meters"})
+            except ConnectionRefusedError:
+                pass
+            check("failed connect drops pin without retry", aether_mcp.bridge_socket_path() == "/next"
+                  and factory.call_count == 3)
+            factory.side_effect = None
+            claim()
+            owner.request.side_effect = BrokenPipeError()
+            result = aether_mcp.handle_tool("app_instance", {"action": "launch"})
+            check("dead owner does not block a fresh launch",
+                  "requires AETHER_MCP_TOKEN" in result["content"][0]["text"]
+                  and aether_mcp._activity_bridge is None)
+        finally:
+            aether_mcp._close_activity_bridge()
+
+
 def test_gesture_session():
     """A phaseful gesture must reuse one bridge connection until terminal."""
     aether_mcp._close_gesture_bridge()
@@ -853,6 +890,7 @@ if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
     test_agent_activity_session()
+    test_agent_activity_pin_cleanup()
     test_gesture_session()
     test_owned_process_shutdown()
     test_secure_app_instance()

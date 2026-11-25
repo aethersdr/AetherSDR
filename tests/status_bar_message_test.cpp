@@ -112,6 +112,33 @@ int main(int argc, char** argv)
     notice.setAgentActivity(QStringLiteral("Testing meters"));
     check(notice.isVisible() && notice.text() == QStringLiteral("Testing meters"),
           "agent activity appears beside zoom");
+    auto* pulse = notice.findChild<QVariantAnimation*>();
+    auto running = [&] { return pulse && pulse->state() == QAbstractAnimation::Running; };
+    const bool motionAllowed = QGuiApplication::styleHints()->accessibility()->motionPreference()
+                               != Qt::MotionPreference::ReducedMotion;
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return window.windowHandle() == QGuiApplication::focusWindow()
+                                      && running() == motionAllowed; }), "visible activity honors motion preference");
+    QWidget cover;
+    cover.setGeometry(window.frameGeometry());
+    cover.show();
+    cover.raise();
+    cover.activateWindow();
+    check(QTest::qWaitFor([&] { return cover.windowHandle() == QGuiApplication::focusWindow() && !running(); }),
+          "covering the window stops the animation");
+    cover.hide();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "uncovering resumes visible activity");
+    window.showMinimized();
+    check(QTest::qWaitFor([&] { return !running(); }), "minimizing stops the animation");
+    window.showNormal();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "restoring resumes visible activity");
+    window.hide();
+    check(!running(), "hiding stops the animation");
+    window.show();
+    window.activateWindow();
+    check(QTest::qWaitFor([&] { return running() == motionAllowed; }), "showing resumes visible activity");
     const int activityInset = notice.contentsMargins().left();
     bar->showMessage(QStringLiteral("Testing meters"));
     check(notice.contentsMargins().left() < activityInset,

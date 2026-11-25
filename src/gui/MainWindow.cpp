@@ -6110,7 +6110,13 @@ void MainWindow::buildUI()
 
     auto* orbit = new AgentControlBadge(m_statusBarContainer);
     hbox->addWidget(orbit);
-    connect(this, &MainWindow::agentActivityChanged, orbit, &AgentControlBadge::showActivity);
+    connect(this, &MainWindow::agentActivityChanged, orbit,
+            [this, orbit](const QString& activity, const QString& agent) {
+                const bool wasHidden = orbit->isHidden();
+                orbit->showActivity(activity, agent);
+                if (wasHidden != orbit->isHidden())
+                    updateStatusBarMinimumWidth();
+            });
 
     // Hidden connection state label (used by connect/disconnect logic)
     m_connStatusLabel = new QLabel("", this);

@@ -61,6 +61,7 @@ REQUEST_TIMEOUT_S = 60
 MAX_INLINE_IMAGE_BYTES = 800_000  # larger grabs are returned as a path only
 
 _activity_bridge = None
+_activity_deadline = None
 _gesture_bridge = None
 _gesture_socket_path = None
 _owned_app = None
@@ -95,7 +96,13 @@ def discover_sockets():
     return unique
 
 
+def _expire_activity_pin():
+    if _activity_deadline is not None and time.monotonic() >= _activity_deadline:
+        _close_activity_bridge()
+
+
 def bridge_socket_path():
+    _expire_activity_pin()
     if _activity_bridge is not None:
         return _activity_bridge.sock_path
     if _owned_app is not None and _owned_app["process"].poll() is None:
@@ -148,6 +155,15 @@ class Bridge:
             pass  # best-effort teardown — a close failure is not actionable
 
 
+def _connect_selected_bridge(path, timeout):
+    try:
+        return Bridge(path, timeout)
+    except OSError:
+        if _activity_bridge is not None and path == _activity_bridge.sock_path:
+            _close_activity_bridge()
+        raise  # Never replay a command on a newly discovered instance.
+
+
 def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
     """Connect, send one request (with the token, if set), return the response."""
     sock_path = bridge_socket_path()
@@ -161,7 +177,7 @@ def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
     # accepts it. Harmless when the bridge has no token configured (the
     # field is simply ignored). `ping` doesn't need it but sending it is fine.
     obj = _authenticated_request(obj)
-    b = Bridge(sock_path, timeout)
+    b = _connect_selected_bridge(sock_path, timeout)
     try:
         return b.request(obj)
     finally:
@@ -177,14 +193,15 @@ def _authenticated_request(obj):
 
 
 def _close_activity_bridge():
-    global _activity_bridge
+    global _activity_bridge, _activity_deadline
+    _activity_deadline = None
     if _activity_bridge is not None:
         _activity_bridge.close()
         _activity_bridge = None
 
 
 def _set_agent_activity(args):
-    global _activity_bridge
+    global _activity_bridge, _activity_deadline
     text = args.get("text")
     if not isinstance(text, str):
         return error_result("text must be a string; send an empty string to finish")
@@ -204,6 +221,8 @@ def _set_agent_activity(args):
         _close_activity_bridge()
     if not result.get("ok"):
         return error_result(result.get("error", "activity rejected"))
+    if result.get("active") and "expiresInMs" in result:
+        _activity_deadline = time.monotonic() + result["expiresInMs"] / 1000
     return text_result(result)
 
 
@@ -469,13 +488,12 @@ TOOLS = [
     {
         "name": "set_agent_activity",
         "description": (
-            "Before driving AetherSDR through MCP or Computer Use, describe your test in "
-            "one sentence: say what you are doing and what you are checking. For example: "
-            "Tuning Slice A to 14.105 MHz and checking the readback. "
+            "Before driving AetherSDR through MCP or Computer Use, report a short phrase "
+            "such as Testing meters or Testing tuning. "
             "Update when the step changes. Repeat the report before five minutes if still working. "
             "Send an empty string when finished. A competing controller returns busy."),
         "inputSchema": {"type": "object", "properties": {
-            "text": {"type": "string", "description": "One operator-facing sentence (up to 64 characters), or empty to release"}
+            "text": {"type": "string", "description": "Short operator-facing phrase (up to 64 characters), or empty to release"}
         }, "required": ["text"], "additionalProperties": False},
     },
     {
@@ -924,6 +942,7 @@ def _maybe_suggest(resp, target):
 
 
 def handle_tool(name, args):
+    _expire_activity_pin()
     if name == "set_agent_activity":
         return _set_agent_activity(args)
     if name == "app_instance":
@@ -995,7 +1014,13 @@ def handle_tool(name, args):
             _remove_owned_socket(_owned_app)
             _owned_app = None
         if _activity_bridge is not None:
-            return error_result("Release agent activity before switching to a new instance")
+            # Probe the held connection itself. A restarted app can reuse its path.
+            try:
+                _activity_bridge.request({"cmd": "ping"})
+            except (OSError, ValueError):
+                _close_activity_bridge()
+            else:
+                return error_result("Release agent activity before switching to a new instance")
         if not os.environ.get("AETHER_MCP_TOKEN"):
             return error_result(
                 "secure launch requires AETHER_MCP_TOKEN in this MCP server environment")
@@ -1318,7 +1343,7 @@ def handle_tool(name, args):
                 return error_result(
                     "no running AetherSDR automation bridge found")
             try:
-                _gesture_bridge = Bridge(sock_path, REQUEST_TIMEOUT_S)
+                _gesture_bridge = _connect_selected_bridge(sock_path, REQUEST_TIMEOUT_S)
                 _gesture_socket_path = sock_path
                 req = {"cmd": "gesture", "action": "begin", "target": target}
                 if args.get("value") is not None:
