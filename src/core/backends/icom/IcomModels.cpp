@@ -650,6 +650,16 @@ std::span<const AttenStep> attenStepsFor(const IcomModel& model)
     return profileFor(model).attenuatorSteps;
 }
 
+std::span<const AttenStep> attenStepsFor(const IcomModel& model, std::uint64_t frequencyHz)
+{
+    const auto steps = attenStepsFor(model);
+    const auto limit = profileFor(model).attenuatorUpperExclusiveHz;
+    if (!steps.empty() && limit && (frequencyHz == 0 || frequencyHz >= limit)) {
+        return steps.first(1); // OFF until a supported receive frequency is confirmed.
+    }
+    return steps;
+}
+
 const FeatureEvidence* IcomModelProfile::evidenceFor(IcomFeature feature) const noexcept
 {
     const auto it = std::ranges::find(features, feature, &FeatureEvidence::feature);
@@ -709,6 +719,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // IC-705 receiver range transition: stage 2 ends at 74.800 MHz (#6497).
         .preampTwoStageUpperExclusiveHz = 74'800'000,
         .attenuatorSteps = kHfAttenuatorSteps,
+        // CI-V 11 20 reads back OFF from 74.800000 MHz on the IC-705 (#6685).
+        .attenuatorUpperExclusiveHz = 74'800'000,
         .modes = kIc705Modes,
         .receiveOnlyModes = kIc705ReceiveOnlyModes,
     };

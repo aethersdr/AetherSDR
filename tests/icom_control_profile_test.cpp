@@ -25,6 +25,15 @@ struct IcomCivBackendTestAccess {
         backend.m_model = &model;
     }
 
+    static void frequencyReply(IcomCivBackend& backend, std::uint64_t hz)
+    {
+        backend.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kReadFreq;
+        frame.data = encodeFreq(hz);
+        backend.onCivFrame(frame, 1);
+    }
+
     static void deliverCwPitch(IcomCivBackend& backend, int raw)
     {
         backend.m_connected = true;
@@ -143,16 +152,17 @@ struct IcomCivBackendTestAccess {
                            [&](const auto& request) { return request.request.frame == frame; });
     }
 
-    // How long after it was queued `frame` may go out; -1 when it is not queued.
+    // Longest holdoff for a matching read. A range transition can already have queued an immediate read.
     static std::int64_t queuedHoldOffMs(const IcomCivBackend& backend,
                                         const std::vector<std::uint8_t>& frame)
     {
+        std::int64_t holdoff = -1;
         for (const auto& entry : backend.m_civScheduler.m_queue) {
             if (entry.request.frame == frame) {
-                return entry.request.notBeforeMs - entry.enqueuedAtMs;
+                holdoff = std::max(holdoff, entry.request.notBeforeMs - entry.enqueuedAtMs);
             }
         }
-        return -1;
+        return holdoff;
     }
 
     static bool interlockReadSurvivesEarlierRead(const IcomModel& model,
@@ -160,6 +170,7 @@ struct IcomCivBackendTestAccess {
     {
         IcomCivBackend backend;
         prepareSession(backend, model);
+        backend.m_frequencyHz = 14'200'000;
         const std::vector<std::uint8_t> read = attenuatorWrite
             ? cmdReadFunction(model.civAddress, func::kPreamp)
             : cmdReadAttenuator(model.civAddress);
@@ -277,6 +288,32 @@ int main(int argc, char** argv)
                 check(std::ranges::equal(preampLabelsFor(model, 14'100'000), preampLabelsFor(model, 442'000'000)),
                       "other verified model ladders remain frequency independent");
             }
+            IcomCivBackend att;
+            IcomCivBackendTestAccess::prepareSession(att, *ic705);
+            QList<int> labelCounts;
+            int writes = 0;
+            QObject::connect(&att, &IRadioBackend::panAttenuatorInfoChanged,
+                [&](const QString&, const QStringList& labels) { labelCounts.append(labels.size()); });
+            QObject::connect(&att, &IRadioBackend::panAttenuatorChanged,
+                [&](const QString&, int) { ++writes; });
+            att.setPanAttenuator({}, 1);
+            check(writes == 0 && IcomCivBackendTestAccess::queuedRequestCount(att) == 0,
+                  "unknown IC-705 frequency declines an ATT write");
+            for (const auto hz : {74'799'999ULL, 74'800'000ULL, 145'500'000ULL, 14'200'000ULL}) {
+                IcomCivBackendTestAccess::frequencyReply(att, hz);
+                const int before = writes;
+                const auto queued = IcomCivBackendTestAccess::queuedRequestCount(att);
+                att.setPanAttenuator({}, 1);
+                const bool available = hz < 74'800'000;
+                check(writes == before + int(available)
+                          && (available || IcomCivBackendTestAccess::queuedRequestCount(att) == queued),
+                      "ATT writes and optimistic state follow confirmed IC-705 receive range");
+            }
+            check(labelCounts == QList<int>{2, 1, 2},
+                  "ATT availability changes once per confirmed range crossing");
+            const auto& mk2 = *modelForName("IC-7300MK2");
+            check(attenStepsFor(mk2, 0).size() == 2 && attenStepsFor(mk2, 145'500'000).size() == 2,
+                  "IC-7300MK2 retains its model-wide ATT ladder");
             int pitch = -1;
             IcomCivBackend backend;
             IcomCivBackendTestAccess::selectModel(backend, *ic705);
@@ -434,6 +471,7 @@ int main(int argc, char** argv)
         const bool hasAttenuator = !attenStepsFor(*model).empty();
         IcomCivBackend attWrite;
         IcomCivBackendTestAccess::prepareSession(attWrite, *model);
+        if (hasAttenuator) { IcomCivBackendTestAccess::frequencyReply(attWrite, 14'200'000); }
         attWrite.setPanAttenuator(QString(), 1);
         if (hasAttenuator) {
             // Held behind the write, like its confirmation read: the radio
@@ -447,6 +485,7 @@ int main(int argc, char** argv)
         }
         IcomCivBackend preampWrite;
         IcomCivBackendTestAccess::prepareSession(preampWrite, *model);
+        if (hasAttenuator) { IcomCivBackendTestAccess::frequencyReply(preampWrite, 14'200'000); }
         preampWrite.setPanPreamp(QString(), 1);
         const std::int64_t attHoldOff =
             IcomCivBackendTestAccess::queuedHoldOffMs(preampWrite, cmdReadAttenuator(address));

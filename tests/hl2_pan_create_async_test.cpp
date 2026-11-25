@@ -4,15 +4,18 @@
 // See docs/HERMES.md §22.4 for the production contract.
 
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "models/MeterModel.h"
 #include "models/SliceModel.h"
 
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
+#include "TxTestAuthority.h"
 #include "SeamThreadAffinityProbe.h"
 
 #include <QCoreApplication>
@@ -26,14 +29,23 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QVariant>
+#include <QVariantMap>
 
 #include <atomic>
+#include <optional>
+#include <string>
+#include <utility>
 #include <cmath>
 #include <vector>
 #include <cstdio>
 #include <tuple>
 
 namespace AetherSDR::hl2 {
+
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
 
 struct Hl2PanCreateTestAccess {
     static bool rebuildReceivers(Hl2Backend& backend, int count)
@@ -146,6 +158,56 @@ struct Hl2PanCreateTestAccess {
     {
         backend.m_rateLedger.commit(rateHz);
     }
+
+    // The modulator, socket-free: configured in `mode` with the passband the
+    // backend publishes for it. Everything already posted to the I/O thread
+    // has run when these return.
+    static bool configureTx(Hl2Backend& backend, WdspChannel::Mode mode, const QString& name)
+    {
+        const auto [lo, hi] = backend.effectiveTxPassband(name);
+        bool ok = false;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&ok, dsp = backend.m_txDsp, mode, lo, hi] {
+            Hl2TxDsp::Config cfg;
+            cfg.mode = mode;
+            cfg.filterLowHz = lo;
+            cfg.filterHighHz = hi;
+            std::string err;
+            ok = dsp->configure(cfg, &err);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    static Hl2TxDsp::Config txConfig(Hl2Backend& backend)
+    {
+        Hl2TxDsp::Config c;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&c, dsp = backend.m_txDsp] { c = dsp->config(); },
+                                  Qt::BlockingQueuedConnection);
+        return c;
+    }
+    static std::optional<WdspChannel::Mode> txChannelMode(Hl2Backend& backend)
+    {
+        std::optional<WdspChannel::Mode> m;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&m, dsp = backend.m_txDsp] {
+            if (const WdspChannel::Config* c = dsp->channelConfig())
+                m = c->mode;
+        }, Qt::BlockingQueuedConnection);
+        return m;
+    }
+    static std::pair<int, int> txPassbandFor(const Hl2Backend& backend, const QString& mode)
+    {
+        return backend.effectiveTxPassband(mode);
+    }
+    // The transmit gate open and a session without a socket, so setKeying()
+    // keys (as in hl2_tx_keyed_mode_change_test).
+    static void openTransmit(Hl2Backend& backend)
+    {
+        backend.m_txAllowed = true;
+        QMetaObject::invokeMethod(backend.m_metis, [m = backend.m_metis] {
+            m->enableTransmit(true);
+            MetisClientTestAccess::setStreaming(*m);
+        }, Qt::BlockingQueuedConnection);
+    }
+    static bool keyed(const Hl2Backend& backend) { return backend.transmitKeyed(); }
+    static void radioPtt(Hl2Backend& backend, bool keyed) { backend.onRadioPttChanged(keyed, true); }
 };
 
 }   // namespace AetherSDR::hl2
@@ -775,6 +837,255 @@ void aFailedBuildLeavesTheRolesOnALiveReceiver()
           "a fixture that had stopped working");
 }
 
+// #7586: transmit on a new DIGU receiver whose build fails, receiver 0 in LSB.
+// Transmit falls back to receiver 0, and the modulator must follow it to LSB
+// with LSB's passband, as removePanadapter()'s hand-off does.
+void aFailedTxBuildHandsTheModulatorTheNewOwnersMode()
+{
+    using Mode = WdspChannel::Mode;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    std::optional<std::pair<int, int>> txFilterEcho;
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                     [&txFilterEcho](const AetherSDR::TransmitDelta& d) {
+                         if (d.txFilterLow && d.txFilterHigh)
+                             txFilterEcho = std::make_pair(*d.txFilterLow, *d.txFilterHigh);
+                     });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    const auto digu = Access::txPassbandFor(backend, QStringLiteral("DIGU"));
+    const AetherSDR::hl2::Hl2TxDsp::Config before = Access::txConfig(backend);
+    check(Access::txDdc(backend) == 1 && before.mode == Mode::Digu
+              && before.filterLowHz == digu.first && before.filterHighHz == digu.second,
+          "setup: transmit is on the new DIGU receiver and the modulator runs DIGU");
+
+    txFilterEcho.reset();
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0,
+          "the build fails and transmit falls back to receiver 0");
+
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    std::fprintf(stderr, "     after the failure: modulator mode %d, %g..%g Hz (LSB is %d..%d)\n",
+                 static_cast<int>(after.mode), after.filterLowHz, after.filterHighHz,
+                 lsb.first, lsb.second);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "the modulator follows receiver 0: LSB with LSB's passband");
+#if AETHER_HL2_TX_TXA
+    check(Access::txChannelMode(backend) == Mode::Lsb, "the TX channel runs LSB");
+#endif
+    check(txFilterEcho == lsb, "the published TX passband follows: LSB's pair is announced");
+
+    std::optional<std::pair<double, double>> published;
+    backend.settleDspChainsForTest();
+    for (const QVariant& v : backend.dspChains()) {
+        const QVariantMap e = v.toMap();
+        if (e.value(QStringLiteral("chain")).toString() == QLatin1String("hl2-tx"))
+            published = std::make_pair(e.value(QStringLiteral("filterLowHz")).toDouble(),
+                                       e.value(QStringLiteral("filterHighHz")).toDouble());
+    }
+    // TXA publishes the channel's signed pair: LSB is the negative mirror.
+    std::fprintf(stderr, "     published hl2-tx passband: %g..%g Hz\n",
+                 published ? published->first : 0.0, published ? published->second : 0.0);
+#if AETHER_HL2_TX_TXA
+    const std::pair<double, double> expected(-lsb.second, -lsb.first);
+#else
+    const std::pair<double, double> expected(lsb.first, lsb.second);
+#endif
+    check(published == expected, "the TX chain's published passband is LSB's");
+}
+
+// #7586, keyed: the TX receiver's build fails during the over. It cannot be
+// kept, and handing the modulator receiver 0's LSB mid-over splatters
+// (#7553), so the over ends with a notice and the hand-off follows the unkey.
+void aKeyedFailedTxBuildEndsTheOverThenHandsOver()
+{
+    using Mode = WdspChannel::Mode;
+    TxTestAuthority auth;   // outlives the backend: its operation keys it
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    QStringList notices;
+    QObject::connect(&backend, &IRadioBackend::transmitFailed, &backend,
+                     [&notices](const QString& reason) { notices << reason; });
+    // mox=false as published; the modulator's mode at that instant (nothing
+    // posted after the edge has run yet); whether the hand-off's passband
+    // echo, posted right after its setMode, came while still keyed.
+    std::optional<bool> moxOff;
+    std::optional<Mode> modeAtUnkey;
+    std::optional<bool> handoffWhileKeyed;
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                     [&](const AetherSDR::TransmitDelta& d) {
+                         if (d.mox && !*d.mox && !moxOff) {
+                             moxOff = true;
+                             modeAtUnkey = Access::txConfig(backend).mode;
+                         }
+                         if (d.txFilterLow && d.txFilterHigh && !handoffWhileKeyed)
+                             handoffWhileKeyed = Access::keyed(backend);
+                     });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "keyed: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::openTransmit(backend);
+    backend.setKeying(true, auth.operation, {});
+    check(Access::keyed(backend) && Access::txDdc(backend) == 1
+              && Access::txConfig(backend).mode == Mode::Digu,
+          "keyed setup: keyed on the new DIGU receiver, the modulator runs DIGU");
+
+    moxOff.reset();
+    handoffWhileKeyed.reset();
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0,
+          "keyed: the build fails and transmit falls back to receiver 0");
+    std::fprintf(stderr, "     keyed after the failure: keyed %d, mox-off %d, notices [%s]\n",
+                 Access::keyed(backend) ? 1 : 0, moxOff.value_or(false) ? 1 : 0,
+                 qPrintable(notices.join(QStringLiteral(" | "))));
+    check(!Access::keyed(backend) && moxOff.value_or(false),
+          "keyed: the over ends (MOX off is published)");
+    check(notices == QStringList{QStringLiteral("TX receiver failed; transmission stopped.")},
+          "keyed: one notice tells the operator why");
+    check(modeAtUnkey == Mode::Digu,
+          "keyed: the modulator was still DIGU when the over ended");
+    check(handoffWhileKeyed == false,
+          "keyed: the hand-off reached the modulator only after the unkey");
+
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    std::fprintf(stderr, "     keyed, after the unkey: modulator mode %d, %g..%g Hz (LSB is %d..%d)\n",
+                 static_cast<int>(after.mode), after.filterLowHz, after.filterHighHz,
+                 lsb.first, lsb.second);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "keyed: then the modulator runs receiver 0's LSB and passband");
+}
+
+// #7586 with the radio's own PTT holding the over and no host key: the host
+// cannot end it, so the hand-off waits for the PTT release.
+void aRadioPttFailedTxBuildHandsOverAtRelease()
+{
+    using Mode = WdspChannel::Mode;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "radio PTT: the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    QStringList notices;
+    QObject::connect(&backend, &IRadioBackend::transmitFailed, &backend,
+                     [&notices](const QString& reason) { notices << reason; });
+
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "radio PTT: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::radioPtt(backend, true);
+    check(Access::keyed(backend) && Access::txConfig(backend).mode == Mode::Digu,
+          "radio PTT setup: the radio's PTT holds the over, the modulator runs DIGU");
+
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+    check(lifecycleFailures == 1 && Access::txDdc(backend) == 0 && notices.size() == 1,
+          "radio PTT: transmit falls back to receiver 0, with the notice");
+    check(Access::txConfig(backend).mode == Mode::Digu,
+          "radio PTT: while the PTT holds, the modulator keeps DIGU");
+
+    Access::radioPtt(backend, false);
+    const auto lsb = Access::txPassbandFor(backend, QStringLiteral("LSB"));
+    const AetherSDR::hl2::Hl2TxDsp::Config after = Access::txConfig(backend);
+    check(after.mode == Mode::Lsb && after.filterLowHz == lsb.first
+              && after.filterHighHz == lsb.second,
+          "radio PTT: at the release the modulator takes receiver 0's LSB and passband");
+}
+
+// The same, but the host keys while the radio's PTT still holds the over and
+// stays keyed past the release: the hand-off then waits for the host unkey.
+void aHostKeyInsideTheRadioPttOverDefersTheHandOffToItsUnkey()
+{
+    using Mode = WdspChannel::Mode;
+    TxTestAuthority auth;
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    if (!Access::configureTx(backend, Mode::Lsb, QStringLiteral("LSB"))) {
+        check(false, "host key: the backend's modulator configures");
+        return;
+    }
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+    ThreadHold hold(Access::buildContext(backend));
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "host key: the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+    const int ui = Access::lastReceiverUi(backend);
+    backend.setTxSlice(ui);
+    backend.setSliceMode(ui, QStringLiteral("DIGU"));
+    Access::openTransmit(backend);
+    Access::radioPtt(backend, true);
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+
+    backend.setKeying(true, auth.operation, {});
+    Access::radioPtt(backend, false);
+    check(Access::keyed(backend) && Access::txConfig(backend).mode == Mode::Digu,
+          "host key: keyed past the PTT release, the modulator keeps DIGU");
+    backend.setKeying(false, auth.operation, {});
+    check(Access::txConfig(backend).mode == Mode::Lsb,
+          "host key: at the host unkey the modulator takes receiver 0's LSB");
+}
+
 }   // namespace
 
 // Swallows the retired chain's DeferredDelete so it is still alive when its
@@ -930,6 +1241,10 @@ int main(int argc, char** argv)
     aRetiredBuildDoesNotCompleteAgainstReconstructedReceivers(true);
     aFailedBuildLeavesTheRolesOnALiveReceiver();
     aFailedBuildWithdrawsItsSMeter();
+    aFailedTxBuildHandsTheModulatorTheNewOwnersMode();
+    aKeyedFailedTxBuildEndsTheOverThenHandsOver();
+    aRadioPttFailedTxBuildHandsOverAtRelease();
+    aHostKeyInsideTheRadioPttOverDefersTheHandOffToItsUnkey();
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(false);
     aStaleSpectrumFrameDoesNotPublishOnTheReuser(true);
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);

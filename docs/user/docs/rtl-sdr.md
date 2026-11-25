@@ -82,6 +82,8 @@ The RTL receive meter reports relative RF peak-bin level in **dBFS**, not calibr
 
 Use the [TCI Server](./tci-server.md) on Linux, macOS or Windows. On Linux and macOS, [DAX Virtual Audio](./dax-virtual-audio.md) can also export receive audio when the build includes WebSockets support. DAX input 1 follows TCI receiver 0, and the applet shows its slice assignment. Linux DAX is mono; macOS DAX and stereo TCI retain left and right WFM audio. Speaker volume and mute do not change either export; receiver squelch still applies.
 
+> **Receive audio is mono (L = R) in SSB and CW, as it already was in AM and SAM.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX) now gets about 3 dB more in SSB and CW; if you set an application's input level (for example WSJT-X) against the old level, check it once. WFM keeps its stereo.
+
 [AetherModem](./aethermodem-packet-radio.md) can decode packets from the selected RTL slice. For VHF APRS, choose **FM** or **FM-N** and **1200 baud**. The modem follows slice selection; it has no fixed-source selector or APRS-IS gateway.
 
 ### Multi-receiver evaluation
