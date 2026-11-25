@@ -304,7 +304,7 @@ private:
     // horizontal scrollbar takes its height out of the viewport.
     int preferredClientHeight(int clientWidth) const;
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
-    void saveManualProfile(const QString& targetIp,
+    QJsonObject saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp,
                            quint16 icomBasePort = 0, bool rememberWorkspace = true);
@@ -330,7 +330,7 @@ private:
     void connectWorkspaceSelection();
     void rememberWorkspaceRadio(const RadioInfo& info, const QString& kind);
     void rememberWorkspaceWan(const WanRadioInfo& info);
-    void rememberWorkspaceManual(const QString& host, const QJsonObject& route);
+    QJsonObject manualWorkspaceConnection(const QString& host);
     void storeWorkspaceConnection(const QJsonObject& connection, const QString& stationId = {}, bool preserveName = true);
     bool prepareWorkspaceLogin(const QString& email);
     void refreshWorkspaceAccounts();
@@ -471,7 +471,8 @@ private:
     QComboBox*   m_manualIcomCivCombo{nullptr};
     QLineEdit*   m_manualIcomCivEdit{nullptr};
     void         populateIcomCivCombo();
-    void         syncIcomCivCustomRow();
+    bool         ic7110RegionApplies() const;
+    void         syncIcomModelRows();
     void         syncIcomPortCustomRow();
     quint16      selectedIcomBasePort() const;
     // Points at Radio Setup's "ANAN Front End" page, where this family's
@@ -501,6 +502,8 @@ private:
     bool         m_icomPasswordPrefilled{false};
     QString      m_pendingIcomUsername;
     QString      m_pendingIcomHost;
+    QString      m_pendingIcomStation;
+    QJsonObject  m_pendingIcomConnection;
     QString      m_pendingIcomResolvedHost;
     quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;

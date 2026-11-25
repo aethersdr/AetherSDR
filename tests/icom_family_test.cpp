@@ -124,8 +124,14 @@ int main(int argc, char** argv)
           "Icom is identified as an experimental radio family");
     check(!ic7300Mk2Notice,
           "CI-V-resolved IC-7300MK2 is not classified as experimental");
-    check(ic705Notice && ic705Notice->displayName == QStringLiteral("Icom"),
-          "another identified Icom model remains experimental");
+    check(!ic705Notice,
+          "CI-V-resolved IC-705 is not classified as experimental");
+    for (const QString& model : {QStringLiteral("IC-9700"), QStringLiteral("Unknown Icom"),
+                                 QStringLiteral("IC-7050")}) {
+        const auto notice = experimentalRadioDescriptor(QStringLiteral("icom"), model);
+        check(notice && icomNotice && notice->noticeSettingKey == icomNotice->noticeSettingKey,
+              "other and unresolved Icom identities retain the family notice");
+    }
     check(experimentalRadioIdentityPending(
               QStringLiteral("icom"), QStringLiteral("Unknown Icom")),
           "an unresolved Icom identity waits before family classification");

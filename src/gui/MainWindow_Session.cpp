@@ -1357,13 +1357,10 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
     const quint64 generation = ++m_experimentalRadioSupportGeneration;
 
     // The Icom transport is connected before CI-V 19 00 identifies the radio.
-    // Showing the family-wide warning on that first edge makes an IC-7300MK2
-    // flash an EXPERIMENTAL badge and modal before its verified 0xB6 identity
-    // arrives. Keep the chrome quiet while identity is in flight. If the radio
-    // never identifies, fall back to the family warning after the backend's
-    // five-attempt discovery window so an unknown Icom is not promoted by
-    // omission. A wake reconnect retries identity for far longer, so it holds
-    // until the wake ends instead (see the radioWakeProgress hook).
+    // Wait for verified identity before showing a badge or notice on connect.
+    // If identity is still unknown after the backend's five discovery attempts,
+    // show the family warning. A wake reconnect retries identity for longer,
+    // so wait until the wake ends (see the radioWakeProgress hook).
     const ExperimentalRadioIdentityHold hold = connected
         ? experimentalRadioIdentityHold(family, model,
                                         m_radioModel.radioWakeActive(),

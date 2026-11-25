@@ -69,12 +69,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   per-client propagation, transmit for SmartLink and the other families,
   transmit audio transport, and a replacement thin UI client — UI code still
   consumes models directly, and that remains correct until that client exists.
-- **Icom networked radios — early; the IC-7300MK2 is supported** — `IcomCIV` speaks CI-V inside the RS-BA1
+- **Icom networked radios — the IC-705 and IC-7300MK2 are supported; other models experimental** — `IcomCIV` speaks CI-V inside the RS-BA1
   UDP transport, brought up in v26.8.2 against a live **IC-705** (RX, scope,
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
   **IC-7300** (RX, scope and stability; transmit unverified). Only the IC-705
-  and IC-7300MK2 are `verified` against their own CI-V guides ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517),
-  approved, promotes the IC-7300MK2 to Supported); an unknown model
+  and IC-7300MK2 are `verified` against their own CI-V guides. An unknown model
   gets no scope and no transmit rather than optimistic defaults. v26.8.3 gave
   the backend a **command plane**: every meter read, control write,
   reconciliation poll and PTT transition goes through one CI-V scheduler with
@@ -87,10 +86,9 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   address with a broadcast `19 00` query. **WSPR** transmits (20 PSK Reporter
   reception reports on the air), **PC Audio** switches the model-specific DATA OFF
   modulation input, and the built-in CW decoder opens on normalized `CWU`.
-  v26.9.5 implemented RFC #5517 in the app: an IC-7300MK2 identified by CI-V
-  over built-in Ethernet/RS-BA1 connects as a **supported** radio, with no
-  experimental badge or disclaimer, while every other model keeps the
-  experimental treatment. v26.10.1 applied TUNE power live while TUNE is
+  The app recognizes the IC-705 and IC-7300MK2 as supported radios after CI-V
+  identification ([IC-705 certification](https://github.com/aethersdr/AetherSDR/issues/7595),
+  [IC-7300MK2 RFC](https://github.com/aethersdr/AetherSDR/issues/5517)). v26.10.1 applied TUNE power live while TUNE is
   keyed, kept an RF power change made during TUNE, stopped VOX, the monitor,
   the speech processor, CW speed and break-in raising a false drop notice, and
   corrected the IC-9700, IC-7610 and IC-785x to advertise the one panadapter

@@ -3,12 +3,12 @@ title: "AetherModem Packet Radio"
 slug: "/aethermodem-packet-radio"
 description: "AetherModem is AetherSDR's built-in AX.25 packet modem."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)", "RTL-SDR (experimental, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental), RTL-SDR (experimental, receive-only)
 
 :::
 
