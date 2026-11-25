@@ -2483,6 +2483,8 @@ private:
                              bool persist = true);
     void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
+    // Operator close: forgets the pan's Center Lock only if the model accepts it.
+    bool closePanForgettingCenterLock(const QString& panId);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
     // MultiFlex instances don't inherit or clobber each other's lock intent.

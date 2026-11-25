@@ -33,6 +33,7 @@
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
+#include "PanCloseCenterLock.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #include "ReceiveCaptureAction.h"
@@ -665,6 +666,27 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
 
     m_centerLockSliceByPan.remove(panId);
     syncCenterLockUi(panId);
+}
+
+bool MainWindow::closePanForgettingCenterLock(const QString& panId)
+{
+    const QString id = panId;   // the caller's string can die with the pan's widget
+    const SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(id) : nullptr;
+    const PanCloseCenterLock::Slot slot{centerLockRadioKey(), sw ? sw->panIndex() : -1,
+                                        m_centerLockSessionOnlyPans.contains(id)};
+    bool savedChanged = false;
+    const bool accepted = PanCloseCenterLock::closeThenForget(
+        slot, m_centerLockSliceLetterByRadioPanIndex,
+        [this, &id] { return m_radioModel.removePanadapter(id); },
+        [this, &id] {
+            m_centerLockRebind.cancel(id);
+            clearCenterLockForPan(id);
+        },
+        savedChanged);
+    if (savedChanged) {
+        saveCenterLockSettings();
+    }
+    return accepted;
 }
 
 void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
@@ -4459,12 +4481,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
-        // A keyed close of the TX pan is refused (with a Notice): keep its lock.
-        if (!m_radioModel.keyedTxPanCloseRefused(panId)) clearCenterLockForPan(panId, true);
-        // Single source of truth for teardown: removePanadapter sends the
-        // FlexLib-correct "display pan remove" + "display panafall remove"
-        // pair, so a panafall-created pan also frees its waterfall. (#3843)
-        m_radioModel.removePanadapter(panId);
+        // removePanadapter sends "display pan remove" + "display panafall
+        // remove", so a panafall-created pan also frees its waterfall (#3843).
+        closePanForgettingCenterLock(panId);
     });
 
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────
