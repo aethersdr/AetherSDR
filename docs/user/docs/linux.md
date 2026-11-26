@@ -198,7 +198,7 @@ On source builds for Ubuntu or Linux Mint whose device lists show only "Dummy Ou
 
 In hands-free mode (HFP/HSP, the profile that also carries the headset's microphone), the headset's output is mono, often at 16 kHz. AetherSDR plays receive audio on it in mono, mixing the left and right channels at equal level, so a slice panned hard to one side is quieter than on a stereo output. For stereo receive audio, switch the headset to its A2DP profile and use another microphone.
 
-If receive audio could not open on an output, it opens without a restart once you choose another output or the system default changes.
+If receive audio could not open on an output, it opens without a restart once you choose another output, or, if AetherSDR follows the system default, once the system default changes.
 
 ### A USB knob, dial or Stream Deck is not found
 

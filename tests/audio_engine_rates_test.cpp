@@ -676,6 +676,11 @@ void monoDeviceAndRetry()
               "a mono device is written whole mono frames, never interleaved stereo");
         check(std::abs(left - 0.15) < 0.015 && std::abs(right - 0.085) < 0.01,
               "a mono device plays (L+R)/2 of the stereo mix");
+        check(fixture.engine.rxDeviceChannelCount() == 1,
+              "diagnostics read the mono device's channel count");
+        AudioEngineRatesTestAccess::closeSink(fixture.engine);
+        check(fixture.engine.rxDeviceChannelCount() == 2,
+              "closing the RX sink resets the channel count to stereo");
     }
     {
         NegotiatingFixture fixture({24000});

@@ -714,6 +714,8 @@ public:
     double rxBufferPeakMs() const { return m_rxBufferPeakMs.load(); }
     quint64 rxBufferUnderrunCount() const { return m_rxBufferUnderrunCount.load(); }
     int rxBufferSampleRate() const { return m_rxBufferSampleRate.load(); }
+    // 1 on a mono-only RX output, else 2 (#7616).
+    int rxDeviceChannelCount() const { return m_rxDeviceChannels.load(); }
     int rxPlaybackQueuedMs() const
     {
         return m_rxPlaybackQueuedMs.load(std::memory_order_relaxed);

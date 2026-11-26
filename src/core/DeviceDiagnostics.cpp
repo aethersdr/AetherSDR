@@ -241,7 +241,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
         ? QJsonValue(audio->rxBufferSampleRate())
         : QJsonValue();
     rxRoute["actual_channel_count"] = (audio && audio->isRxStreaming())
-        ? QJsonValue(2)
+        ? QJsonValue(audio->rxDeviceChannelCount())
         : QJsonValue();
     rxRoute["actual_sample_format"] = (audio && audio->isRxStreaming())
         ? QJsonValue(QStringLiteral("Float"))
