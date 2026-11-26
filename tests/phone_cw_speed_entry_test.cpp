@@ -8,6 +8,7 @@
 #include <QAccessible>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QLineEdit>
 #include <QStringList>
 #include <QSignalSpy>
@@ -306,6 +307,31 @@ int main(int argc, char** argv)
     QAccessibleInterface* bareA11y = QAccessible::queryAccessibleInterface(&bare);
     check(bareA11y && bareA11y->text(QAccessible::Value) == QStringLiteral("R30"),
           "a CenterMarkSlider with no formatter set still reads R30");
+
+    // What the pan's valueChanged drives is reported as controlled by it,
+    // as with Qt's own slider interface.
+    QLabel readout;
+    QObject::connect(&bare, &QSlider::valueChanged,
+                     &readout, qOverload<int>(&QLabel::setNum));
+    bool controlsReadout = false;
+    if (bareA11y) {
+        const auto controlled = bareA11y->relations();
+        for (const auto& relation : controlled)
+            controlsReadout = controlsReadout
+                || (relation.first->object() == &readout
+                    && relation.second.testFlag(QAccessible::Controlled));
+    }
+    check(controlsReadout, "the pan reports the widget its value drives");
+
+    // Assistive tech cannot move a disabled pan.
+    bare.setEnabled(false);
+    if (bareA11y && bareA11y->valueInterface())
+        bareA11y->valueInterface()->setCurrentValue(10);
+    check(bare.value() == 80, "a disabled pan ignores a value set through accessibility");
+    bare.setEnabled(true);
+    if (bareA11y && bareA11y->valueInterface())
+        bareA11y->valueInterface()->setCurrentValue(10);
+    check(bare.value() == 10, "an enabled pan takes a value set through accessibility");
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;
 }

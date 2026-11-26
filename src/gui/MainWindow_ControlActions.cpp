@@ -433,8 +433,7 @@ void MainWindow::registerControlActions()
             // the active slice is not on (Select Panadapter N).
             const QString panId = m_panStack ? m_panStack->activePanId() : QString();
             if (panId.isEmpty() || !m_panStack || m_panStack->count() <= 1) return;
-            clearCenterLockForPan(panId, true);
-            m_radioModel.removePanadapter(panId);
+            closePanForgettingCenterLock(panId);
         })
         .inMidiCategory("Global")
         .when([this] { return m_radioModel.isConnected() && m_panStack && m_panStack->count() > 1; }));
@@ -593,10 +592,10 @@ void MainWindow::registerControlActions()
 
     // ── Radio-side receive features ────────────────────────────────────
     // WNB: the panadapter's wideband blanker, offered where the overlay menu
-    // offers it (radio-side DSP).
+    // offers both the toggle and the threshold.
     const auto wnbAvailable = [this] {
         return m_radioModel.isConnected() && m_radioModel.activePanadapter()
-            && m_radioModel.hasRadioSideDsp();
+            && panWnbSupported();
     };
     reg.add(A::toggle("wnb_toggle", "rx.wnbEnable", "WNB", "DSP",
         [this](float v) {

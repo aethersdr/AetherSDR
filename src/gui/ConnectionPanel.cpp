@@ -11,6 +11,13 @@
 #include "core/backends/icom/IcomModels.h"       // knownModels() -> the chooser's items
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/aetherd/RemoteEngineStore.h"   // paired remote engines (family "aetherd")
+#ifdef HAVE_WEBSOCKETS
+#include "core/backends/aetherd/RemoteEnginePairing.h"
+#endif
+#include <QInputDialog>
+#include <QSysInfo>
+#include <QUrl>
 #include "core/NetworkPathResolver.h"
 #include "core/RemoteSession.h"
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
@@ -40,7 +47,9 @@
 #include <QStyle>
 #include <QFont>
 #include <QFontMetrics>
+#include <QHideEvent>
 #include <QPointer>
+#include <QShowEvent>
 #include <QLineEdit>
 #include <QFormLayout>
 #include <QGuiApplication>
@@ -538,8 +547,8 @@ QString normalizedStatus(QString status)
 
 }
 
-ConnectionPanel::ConnectionPanel(QWidget* parent)
-    : CanonWindow(tr("Connect to a radio"), parent)
+ConnectionPanel::ConnectionPanel(QWidget* parent, RemoteDiscovery remoteDiscovery)
+    : CanonWindow(tr("Connect to a radio"), parent), m_remoteDiscovery(remoteDiscovery)
 {
     setObjectName(QStringLiteral("connectionPanel"));
     setAccessibleName(tr("Connect to Radio"));
@@ -776,6 +785,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     emptyLayout->addWidget(emptyCallout);
     emptyLayout->addStretch();
     m_localStateStack->addWidget(m_localEmptyState);
+    buildRemoteEngineSection(localPage, localLayout, editStyle, comboExtraRules);
 
     m_modeStack->addWidget(localPage);
 
@@ -1082,6 +1092,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     populateIcomCivCombo();
     m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivCombo);
 
+    m_ic7110Market = new QComboBox(manualGroup);
+    m_ic7110Market->setObjectName(QStringLiteral("connectionIc7110Market"));
+    m_ic7110Market->setAccessibleName(tr("IC-7110 radio region"));
+    m_ic7110Market->addItem(tr("Japan / other / unknown"), QString{});
+    m_ic7110Market->addItem(tr("United States"), QStringLiteral("US"));
+    m_ic7110Market->addItem(tr("Europe"), QStringLiteral("EU"));
+    AetherSDR::applyComboStyle(m_ic7110Market, comboExtraRules);
+    m_ic7110MarketRow = addManualRow(tr("IC-7110 region:"), m_ic7110Market);
+    const auto restoreMarket = [this] {
+        const auto saved = IcomSettings::ic7110Market(m_manualIpEdit->text(), selectedIcomBasePort());
+        m_ic7110Market->setCurrentIndex(qMax(0, m_ic7110Market->findData(saved)));
+    };
+    connect(m_manualIpEdit, &QLineEdit::textChanged, this, restoreMarket);
+    connect(m_manualIcomBasePortSpin, &QSpinBox::valueChanged, this, restoreMarket);
+    connect(m_manualIcomPortCombo, &QComboBox::currentIndexChanged, this, restoreMarket);
+    restoreMarket();
+
     // The hex entry, kept for the radio whose address has been changed to
     // something no model uses, and for a shared CI-V bus where the operator is
     // selecting WHICH DEVICE rather than naming a model.
@@ -1109,7 +1136,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // or pick the model directly ("IC-9700 — A2"). The objectName is kept so
     // the refusal names the field a script already uses.
     connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) { syncIcomCivCustomRow(); });
+            this, [this](int) { syncIcomModelRows(); });
 
     // ANAN-G2's front-end options (DDC0 rate, ADC select, dither,
     // randomization, the two filter-bank bypasses and the radio-speaker stream)
@@ -1516,6 +1543,26 @@ bool ConnectionPanel::event(QEvent* e)
     return CanonWindow::event(e);
 }
 
+void ConnectionPanel::showEvent(QShowEvent* event)
+{
+    CanonWindow::showEvent(event);
+    if (m_remoteEngineProbeTimer) {
+        m_remoteEngineProbeTimer->start();
+        QTimer::singleShot(0, this, [this] {
+            if (isVisible()) { m_remoteEngineDiscovery->probe(); }
+        });
+    }
+}
+
+void ConnectionPanel::hideEvent(QHideEvent* event)
+{
+    if (m_remoteEngineProbeTimer) {
+        m_remoteEngineProbeTimer->stop();
+        m_remoteEngineDiscovery->stop();
+    }
+    CanonWindow::hideEvent(event);
+}
+
 QScreen* ConnectionPanel::screenFitTarget(QScreen* preferredScreen) const
 {
     QScreen* targetScreen = preferredScreen;
@@ -1646,6 +1693,8 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomPassword.clear();
     m_pendingIcomUsername.clear();
     m_pendingIcomHost.clear();
+    m_pendingIcomStation.clear();
+    m_pendingIcomConnection = {};
     m_pendingIcomResolvedHost.clear();
     m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
@@ -1719,10 +1768,13 @@ void ConnectionPanel::setConnected(bool connected)
             // address at the next launch. Icom cannot be probed anonymously,
             // so commit it only after the authenticated session proves the
             // host and credentials together.
-            saveManualProfile(m_pendingIcomHost,
-                              m_pendingIcomBindSettings,
-                              m_pendingIcomSessionBindAddress,
-                              m_pendingIcomBasePort);
+            const QJsonObject route = saveManualProfile(m_pendingIcomHost, m_pendingIcomBindSettings,
+                m_pendingIcomSessionBindAddress, m_pendingIcomBasePort, false);
+            if (!m_pendingIcomConnection.isEmpty()) {
+                m_pendingIcomConnection["route"] = route;
+                m_pendingIcomConnection["credentialId"] = credentialId;
+                storeWorkspaceConnection(m_pendingIcomConnection, m_pendingIcomStation, false);
+            }
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
                 // Mirror the profile under that key as well so a hostname such
@@ -1959,6 +2011,20 @@ void ConnectionPanel::saveLowBandwidthPreference(bool enabled)
 
 QString ConnectionPanel::formatLocalRadioLabel(const RadioInfo& radio) const
 {
+    if (m_remoteEngineRows.contains(radio.serial)) {
+        // A remote aetherd (docs/aetherd-remote-backend.md §3): never "in use",
+        // and the operator is told there is no spectrum or audio yet.
+        // Until the engine has advertised, the radio behind it is not known.
+        const QString title = radio.model.trimmed().isEmpty()
+            ? tr("Remote engine (%1)").arg(radio.nickname.trimmed())
+            : tr("%1 — remote engine (%2)").arg(radio.model.trimmed(), radio.nickname.trimmed());
+        QString detail = tr("Mirrors the engine at %1 • tuning and receive controls, no spectrum or audio yet")
+                             .arg(radio.address.toString());
+        if (!aetherd::RemoteEngineStore::persistentStoreAvailable()) {
+            detail += tr(" • paired for this session only");
+        }
+        return title + QLatin1Char('\n') + detail;
+    }
     QString title = radio.model.trimmed();
     if (!radio.nickname.trimmed().isEmpty())
         title += QStringLiteral("  %1").arg(radio.nickname.trimmed());
@@ -2221,6 +2287,17 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
         return;
     const RadioInfo radio = m_radios[row];
 
+    if (m_remoteEngineRows.contains(radio.serial)) {
+        QMenu menu(this);
+        QAction* tailnet = menu.addAction(tr("Set Tailnet Address…"));
+        QAction* forget = menu.addAction(tr("Forget This Engine"));
+        QAction* chosen = menu.exec(m_radioList->mapToGlobal(pos));
+        const QString engineId = aetherd::RemoteEngineCredentials::engineIdOf(radio.serial);
+        if (chosen == tailnet) { editRemoteEngineTailnet(engineId); }
+        else if (chosen == forget) { forgetRemoteEngine(engineId); }
+        return;
+    }
+
     // Flex stores its name on the radio itself (set from Radio Setup while
     // connected); offering a client-side override here would create two sources
     // of truth. So the client-side nickname is only for families without an
@@ -2445,6 +2522,8 @@ void ConnectionPanel::onWanConnectClicked()
         return;
     beginExplicitConnection();
     if (!m_dispatchingTarget) { m_pendingWorkspaceStation.clear(); m_pendingWorkspaceConnection.clear(); }
+    // A staged Icom credential belongs to the attempt it was staged for.
+    clearPendingIcomCredentials();
 
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
     emit wanConnectRequested(m_wanRadios[row]);
@@ -2784,10 +2863,22 @@ void ConnectionPanel::populateIcomCivCombo()
         break;
     }
     }
-    syncIcomCivCustomRow();
+    syncIcomModelRows();
 }
 
-void ConnectionPanel::syncIcomCivCustomRow()
+bool ConnectionPanel::ic7110RegionApplies() const
+{
+    // Auto-detect can land on an IC-7110; an explicit other model or Custom
+    // cannot. Model entries carry their factory CI-V address, and Auto and
+    // Custom carry sentinels, so a custom bus address is never read as a model.
+    if (currentManualFamily() != QLatin1String(kFamilyIcom)) {
+        return false;
+    }
+    const QString civ = m_manualIcomCivCombo->currentData().toString();
+    return civ == QLatin1String("__auto__") || civ == QLatin1String("BA");
+}
+
+void ConnectionPanel::syncIcomModelRows()
 {
     if (!m_manualIcomCivCombo || !m_manualIcomCivCustomRow)
         return;
@@ -2795,6 +2886,7 @@ void ConnectionPanel::syncIcomCivCustomRow()
     const bool custom =
         m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
     m_manualIcomCivCustomRow->setVisible(icom && custom);
+    m_ic7110MarketRow->setVisible(ic7110RegionApplies());
 }
 
 void ConnectionPanel::syncIcomPortCustomRow()
@@ -2839,7 +2931,7 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualIcomCivRow->setVisible(icom);
     // The hex row has a second condition — "Custom..." — so it gets the shared
     // helper rather than a copy of the visibility rule.
-    syncIcomCivCustomRow();
+    syncIcomModelRows();
     syncIcomPortCustomRow();
 
     if (m_manualAnanHintRow)
@@ -2957,13 +3049,13 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
     m_manualIpCombo->setCurrentText(normalized);
 }
 
-void ConnectionPanel::saveManualProfile(const QString& targetIp,
+QJsonObject ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
                                         const QHostAddress& lastSuccessfulLocalIp,
                                        quint16 icomBasePort, bool rememberWorkspace)
 {
     if (targetIp.trimmed().isEmpty())
-        return;
+        return {};
 
     QJsonObject profiles = loadRoutedProfiles();
     QJsonObject profile;
@@ -2993,7 +3085,12 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
 
     profiles[targetIp] = profile;
     saveRoutedProfiles(profiles);
-    if (rememberWorkspace) { rememberWorkspaceManual(targetIp, profile); }
+    if (rememberWorkspace && !m_workspace.isEmpty()) {
+        QJsonObject connection = manualWorkspaceConnection(targetIp);
+        connection["route"] = profile;
+        storeWorkspaceConnection(connection, m_pendingWorkspaceStation, false);
+    }
+    return profile;
 }
 
 void ConnectionPanel::onManualIpChanged(const QString& ip)
@@ -3340,6 +3437,17 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             resolved = hostInfo.addresses().first();
         }
         m_pendingIcomResolvedHost = resolved.toString();
+        // Custom reuses an endpoint's saved region. Auto-detect and an explicit
+        // IC-7110 selection show the region row, so they write what it holds.
+        const bool editRegion = ic7110RegionApplies();
+        const QString market = editRegion ? m_ic7110Market->currentData().toString()
+                                          : IcomSettings::ic7110Market(trimmedIp, basePort);
+        if (editRegion) {
+            IcomSettings::setIc7110Market(trimmedIp, basePort, market);
+        }
+        if (m_pendingIcomResolvedHost != trimmedIp && (editRegion || !market.isEmpty())) {
+            IcomSettings::setIc7110Market(m_pendingIcomResolvedHost, basePort, market);
+        }
 
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
@@ -3361,6 +3469,16 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.isRouted           = true;
         info.bindSettings       = bindSettings;
         info.sessionBindAddress = m_pendingIcomSessionBindAddress;
+        // Successful-target bookkeeping can clear the chooser selection before
+        // authentication commits this route. Keep the path and its location
+        // with the credentials for this specific attempt.
+        if (!m_workspace.isEmpty()) {
+            m_pendingIcomStation = m_pendingWorkspaceStation.isEmpty()
+                ? m_workspace.value("selectedStation").toString() : m_pendingWorkspaceStation;
+            m_pendingIcomConnection = manualWorkspaceConnection(trimmedIp);
+            m_pendingIcomConnection["username"] = m_pendingIcomUsername;
+            m_pendingIcomConnection["serial"] = info.serial;
+        }
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
         finishManualProbe(info);
@@ -4728,6 +4846,9 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         bool stale = false;
         const RadioBindSettings bind = currentManualBindSettings(&stale);
         if (stale) { setStatusText(tr("Choose an available source interface before saving.")); return; }
+        if (ic7110RegionApplies()) {
+            IcomSettings::setIc7110Market(host, selectedIcomBasePort(), m_ic7110Market->currentData().toString());
+        }
         saveManualProfile(host, bind, bind.bindAddress);
         setCurrentMode(WorkspaceMode);
     });
@@ -5060,17 +5181,16 @@ void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
         m_workspace.value("selectedStation").toString());
 }
 
-void ConnectionPanel::rememberWorkspaceManual(const QString& host, const QJsonObject& route)
+QJsonObject ConnectionPanel::manualWorkspaceConnection(const QString& host)
 {
-    if (m_workspace.isEmpty()) { return; }
     if (m_pendingWorkspaceConnection.isEmpty()) { m_pendingWorkspaceConnection = ConnectionWorkspace::newId(); }
-    storeWorkspaceConnection({{"id", m_pendingWorkspaceConnection},
+    return {{"id", m_pendingWorkspaceConnection},
         {"name", m_manualConnectionName->text().trimmed().isEmpty() ? host : m_manualConnectionName->text().trimmed()},
         {"model", m_manualRadioTypeCombo->currentText()},
-        {"kind", "manual"}, {"family", currentManualFamily()}, {"host", host}, {"route", route},
+        {"kind", "manual"}, {"family", currentManualFamily()}, {"host", host},
         {"username", m_manualIcomUserEdit->text().trimmed()}, {"civ", m_manualIcomCivCombo->currentData().toString()},
         {"credentialId", boundIcomCredentialId()},
-        {"customCiv", m_manualIcomCivEdit->text()}, {"lowBandwidth", m_lowBwCheck->isChecked()}}, m_pendingWorkspaceStation, false);
+        {"customCiv", m_manualIcomCivEdit->text()}, {"lowBandwidth", m_lowBwCheck->isChecked()}};
 }
 
 void ConnectionPanel::saveWorkspaceSelection()
@@ -5849,6 +5969,287 @@ void ConnectionPanel::removeWorkspaceProfile(const QString& collection, const QS
         emit smartLinkSignedOut();
         activateWorkspaceAccount(next.value("selectedAccount").toString());
         updateSmartLinkUi();
+    }
+}
+
+// ── Remote engines (family "aetherd", docs/aetherd-remote-backend.md §3) ─────
+
+void ConnectionPanel::buildRemoteEngineSection(QWidget* parent, QVBoxLayout* layout,
+                                               const QString& editStyle, const QString& comboStyle)
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* group = new QGroupBox(tr("Remote engine"), parent);
+    group->setObjectName(QStringLiteral("connectionRemoteEngineGroup"));
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setContentsMargins(12, 14, 12, 12);
+    groupLayout->setSpacing(8);
+    groupLayout->addWidget(makeWrappedLabel(
+        tr("Mirror a radio whose own aetherd holds it, such as an ANAN G2 front panel. "
+           "Start pairing on the radio's screen (Settings, Remote clients, Pair a device), "
+           "then enter the code it shows."), kHintLabelStyle));
+
+    auto* form = new QFormLayout;
+    m_remoteEngineAddress = new QComboBox(group);
+    m_remoteEngineAddress->setObjectName(QStringLiteral("connectionRemoteEngineAddress"));
+    m_remoteEngineAddress->setAccessibleName(tr("Remote engine address"));
+    m_remoteEngineAddress->setAccessibleDescription(
+        tr("An engine advertised on this network, or a wss:// address typed by hand"));
+    m_remoteEngineAddress->setEditable(true);
+    m_remoteEngineAddress->setInsertPolicy(QComboBox::NoInsert);
+    AetherSDR::applyComboStyle(m_remoteEngineAddress, comboStyle);
+    m_remoteEngineAddress->lineEdit()->setPlaceholderText(QStringLiteral("wss://192.168.1.50:8443"));
+    form->addRow(tr("Address:"), m_remoteEngineAddress);
+
+    m_remoteEngineCode = new QLineEdit(group);
+    m_remoteEngineCode->setObjectName(QStringLiteral("connectionRemoteEngineCode"));
+    m_remoteEngineCode->setAccessibleName(tr("Pairing code"));
+    m_remoteEngineCode->setAccessibleDescription(tr("The ten-digit code shown on the radio's screen"));
+    m_remoteEngineCode->setPlaceholderText(QStringLiteral("123 456 7890"));
+    m_remoteEngineCode->setMaxLength(16);
+    applyStyle(m_remoteEngineCode, editStyle);
+    form->addRow(tr("Code:"), m_remoteEngineCode);
+    groupLayout->addLayout(form);
+
+    auto* row = new QHBoxLayout;
+    m_remoteEngineStatus = makeWrappedLabel(QString(), kHintLabelStyle);
+    m_remoteEngineStatus->setObjectName(QStringLiteral("connectionRemoteEngineStatus"));
+    if (!aetherd::RemoteEngineStore::persistentStoreAvailable()) {
+        m_remoteEngineStatus->setText(tr(
+            "This build has no keychain, so a pairing lasts for this session only and each launch "
+            "pairs again. The radio's Remote clients list keeps the earlier pairings until you "
+            "remove them on the radio's screen."));
+    }
+    row->addWidget(m_remoteEngineStatus, 1);
+    m_remoteEnginePairBtn = new QPushButton(tr("Pair"), group);
+    m_remoteEnginePairBtn->setObjectName(QStringLiteral("connectionRemoteEnginePairButton"));
+    m_remoteEnginePairBtn->setAccessibleName(tr("Pair with the remote engine"));
+    row->addWidget(m_remoteEnginePairBtn, 0, Qt::AlignTop);
+    groupLayout->addLayout(row);
+    layout->addWidget(group);
+
+    auto* pairing = new aetherd::RemoteEnginePairing(this);
+    m_remoteEnginePairing = pairing;
+    connect(m_remoteEnginePairBtn, &QPushButton::clicked, this, [this] { startRemoteEnginePairing(); });
+    connect(m_remoteEngineCode, &QLineEdit::returnPressed, this, [this] { startRemoteEnginePairing(); });
+    connect(pairing, &aetherd::RemoteEnginePairing::failed, this, [this](const QString& reason) {
+        m_remoteEnginePairBtn->setEnabled(true);
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kErrorLabelStyle));
+        m_remoteEngineStatus->setText(reason);
+    });
+    connect(pairing, &aetherd::RemoteEnginePairing::paired, this,
+            [this](const aetherd::RemoteEngineRecord& paired) {
+        m_remoteEnginePairBtn->setEnabled(true);
+        m_remoteEngineCode->clear();
+        aetherd::RemoteEngineRecord record = paired;
+        if (const auto advert = m_remoteEngineAdverts.constFind(record.engineId);
+            advert != m_remoteEngineAdverts.constEnd() && record.name.isEmpty()) {
+            record.name = advert->name;
+        }
+        const quint64 generation = m_remotePairingGeneration;
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kInfoLabelStyle));
+        m_remoteEngineStatus->setText(tr("Paired. Saving the token in the keychain…"));
+        aetherd::RemoteEngineStore::save(record, this, [this, generation](bool persisted) {
+            if (generation != m_remotePairingGeneration) { return; }
+            m_remoteEngineStatus->setText(persisted
+                ? tr("Paired. Select the engine in the list and connect.")
+                : tr("Paired for this session. Select the engine in the list and connect. "
+                     "The radio keeps this pairing until you remove it from Remote clients."));
+        });
+        if (const auto saved = aetherd::RemoteEngineCredentials::session(record.engineId)) {
+            publishRemoteEngine(*saved);
+        }
+    });
+
+    if (m_remoteDiscovery == RemoteDiscovery::Enabled) {
+        m_remoteEngineDiscovery = new aetherd::RemoteEngineDiscovery(this);
+        connect(m_remoteEngineDiscovery, &aetherd::RemoteEngineDiscovery::engineFound,
+                this, &ConnectionPanel::onRemoteEngineAdvert);
+        m_remoteEngineProbeTimer = new QTimer(this);
+        m_remoteEngineProbeTimer->setInterval(5000);
+        const auto probeIfVisible = [this] {
+            if (isVisible()) { m_remoteEngineDiscovery->probe(); }
+        };
+        connect(m_remoteEngineProbeTimer, &QTimer::timeout, this, probeIfVisible);
+        connect(this, &ConnectionPanel::retryDiscoveryRequested, this, probeIfVisible);
+    }
+
+    // Engines paired earlier: their tokens come out of the keychain into the
+    // session cache before they are listed, so a connect never waits on it.
+    aetherd::RemoteEngineStore::primeSessions(this, [this](int) {
+        for (const aetherd::RemoteEngineRecord& record : aetherd::RemoteEngineStore::records()) {
+            if (const auto session = aetherd::RemoteEngineCredentials::session(record.engineId);
+                session && session->usable()) {
+                publishRemoteEngine(*session);
+            }
+        }
+        offerStartupRemoteEngine();
+    });
+#else
+    QTimer::singleShot(0, this, &ConnectionPanel::offerStartupRemoteEngine);
+    Q_UNUSED(parent);
+    Q_UNUSED(layout);
+    Q_UNUSED(editStyle);
+    Q_UNUSED(comboStyle);
+#endif
+}
+
+void ConnectionPanel::offerStartupRemoteEngine()
+{
+    auto& settings = AppSettings::instance();
+    if (settings.value("AutoConnectToLastRadio", "True").toString() != QLatin1String("True")) { return; }
+    const QString serial = settings.value("LastConnectedRadioSerial").toString();
+    if (!aetherd::RemoteEngineCredentials::validEngineId(aetherd::RemoteEngineCredentials::engineIdOf(serial))) {
+        return;
+    }
+#ifdef HAVE_WEBSOCKETS
+    if (m_remoteEngineRows.contains(serial)) {
+        for (const RadioInfo& radio : std::as_const(m_radios)) {
+            if (radio.serial == serial) {
+                const RadioInfo restored = radio;
+                emit remoteEngineRestored(restored);
+                return;
+            }
+        }
+    }
+    emit startupConnectUnavailable(tr("The last remote engine needs pairing on this machine."));
+#else
+    emit startupConnectUnavailable(tr("This build has no Qt WebSockets, so it cannot reach a remote engine."));
+#endif
+}
+
+void ConnectionPanel::onRemoteEngineAdvert(const aetherd::RemoteEngineDiscovery::Advert& advert)
+{
+    constexpr qsizetype kMaximumAdvertisedEngines = 64;
+    const auto session = aetherd::RemoteEngineCredentials::session(advert.certificateSha256);
+    if (session && session->usable()) {
+        const QUrl pairedUrl(session->lanUrl);
+        if (!QHostAddress(pairedUrl.host()).isEqual(advert.address, QHostAddress::ConvertV4MappedToIPv4)
+            || pairedUrl.port() != advert.port) { return; }
+    }
+    const bool known = m_remoteEngineAdverts.contains(advert.certificateSha256);
+    if (!known && m_remoteEngineAdverts.size() >= kMaximumAdvertisedEngines) { return; }
+    m_remoteEngineAdverts.insert(advert.certificateSha256, advert);
+    if (session && session->usable()) {
+        publishRemoteEngine(*session);
+        return;
+    }
+    if (!m_remoteEngineAddress) { return; }
+    const QString label = tr("%1 — remote engine (%2)")
+        .arg(advert.model.isEmpty() ? tr("Radio") : advert.model, advert.name);
+    constexpr int kFingerprintRole = Qt::UserRole + 1;
+    const int index = m_remoteEngineAddress->findData(advert.certificateSha256, kFingerprintRole);
+    if (index >= 0) {
+        m_remoteEngineAddress->setItemData(index, advert.wssUrl);
+        return;
+    }
+    m_remoteEngineAddress->addItem(label, advert.wssUrl);
+    m_remoteEngineAddress->setItemData(m_remoteEngineAddress->count() - 1,
+                                       advert.certificateSha256, kFingerprintRole);
+    if (m_remoteEngineAddress->count() == 1) { m_remoteEngineAddress->setCurrentIndex(0); }
+}
+
+void ConnectionPanel::startRemoteEnginePairing()
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* pairing = qobject_cast<aetherd::RemoteEnginePairing*>(m_remoteEnginePairing);
+    if (!pairing || pairing->running()) { return; }
+    // An advertised entry carries its URL; a typed one is the text itself.
+    const int index = m_remoteEngineAddress->currentIndex();
+    const bool typed = index < 0 || m_remoteEngineAddress->currentText() != m_remoteEngineAddress->itemText(index);
+    const QString url = typed ? m_remoteEngineAddress->currentText().trimmed()
+                              : m_remoteEngineAddress->itemData(index).toString();
+    QString engineName;
+    for (const auto& advert : std::as_const(m_remoteEngineAdverts)) {
+        if (advert.wssUrl == url) { engineName = advert.name; }
+    }
+    ++m_remotePairingGeneration;
+    m_remoteEnginePairBtn->setEnabled(false);
+    applyStyle(m_remoteEngineStatus, QString::fromLatin1(kHintLabelStyle));
+    m_remoteEngineStatus->setText(tr("Pairing…"));
+    pairing->start(url, m_remoteEngineCode->text(), QSysInfo::machineHostName(), engineName);
+#endif
+}
+
+RadioInfo ConnectionPanel::remoteEngineRadioInfo(const aetherd::RemoteEngineRecord& record) const
+{
+    RadioInfo info;
+    info.family = QString::fromLatin1(kFamilyAetherd);
+    info.serial = record.engineId;
+    const QUrl url(record.lanUrl);
+    info.address = QHostAddress(url.host());
+    info.port = quint16(url.port());
+    info.nickname = record.name.isEmpty() ? url.host() : record.name;
+    if (const auto advert = m_remoteEngineAdverts.constFind(record.engineId);
+        advert != m_remoteEngineAdverts.constEnd()
+        && info.address.isEqual(advert->address, QHostAddress::ConvertV4MappedToIPv4)
+        && info.port == advert->port) {
+        info.model = advert->model;
+    }
+    // Never in use: an engine holding its radio is the normal case
+    // (ConnectionSharingPolicy.h does not grow).
+    info.inUse = false;
+    return info;
+}
+
+void ConnectionPanel::publishRemoteEngine(const aetherd::RemoteEngineRecord& record)
+{
+    m_remoteEngineRows.insert(record.engineId);
+    onRadioDiscovered(remoteEngineRadioInfo(record));
+    // The tailnet path is its own entry, so the operator picks the route.
+    const QString tailnetSerial = record.engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix;
+    if (!record.tailnetUrl.isEmpty()) {
+        RadioInfo tailnet = remoteEngineRadioInfo(record);
+        const QUrl url(record.tailnetUrl);
+        tailnet.serial = tailnetSerial;
+        tailnet.address = QHostAddress(url.host());
+        tailnet.port = quint16(url.port());
+        tailnet.nickname += tr(" (tailnet)");
+        m_remoteEngineRows.insert(tailnetSerial);
+        onRadioDiscovered(tailnet);
+    } else {
+        removeRemoteEngineEntry(tailnetSerial);
+    }
+}
+
+void ConnectionPanel::removeRemoteEngineEntry(const QString& serial)
+{
+    if (m_remoteEngineRows.remove(serial)) { onRadioLost(serial); }
+}
+
+void ConnectionPanel::forgetRemoteEngine(const QString& engineId)
+{
+    ++m_remotePairingGeneration;
+    aetherd::RemoteEngineStore::forget(engineId);
+    removeRemoteEngineEntry(engineId);
+    removeRemoteEngineEntry(engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix);
+    if (m_remoteEngineStatus) {
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kHintLabelStyle));
+        m_remoteEngineStatus->setText(tr(
+            "Forgotten on this machine. Remove it from the radio's Remote clients list on the radio's screen."));
+    }
+    updateLocalPageState();
+    emit radioAvailabilityChanged();
+}
+
+void ConnectionPanel::editRemoteEngineTailnet(const QString& engineId)
+{
+    const std::optional<aetherd::RemoteEngineRecord> record = aetherd::RemoteEngineStore::record(engineId);
+    if (!record) { return; }
+    bool ok = false;
+    const QString url = QInputDialog::getText(this, tr("Tailnet Address"),
+        tr("A ws:// address on the engine's tailnet, used only over Tailscale or WireGuard.\n"
+           "Leave empty to remove it."),
+        QLineEdit::Normal, record->tailnetUrl, &ok).trimmed();
+    if (!ok) { return; }
+    if (!aetherd::RemoteEngineStore::setTailnetUrl(engineId, url)) {
+        if (m_remoteEngineStatus) {
+            applyStyle(m_remoteEngineStatus, QString::fromLatin1(kErrorLabelStyle));
+            m_remoteEngineStatus->setText(tr("A tailnet address is ws://<IP address>:<port>."));
+        }
+        return;
+    }
+    if (const auto session = aetherd::RemoteEngineCredentials::session(engineId); session && session->usable()) {
+        publishRemoteEngine(*session);
     }
 }
 

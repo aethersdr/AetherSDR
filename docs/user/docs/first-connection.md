@@ -41,6 +41,8 @@ The window automatically fits its height to the available screen space, includin
 3. Select your radio and click **Connect**. The connection is saved in this location.
 4. The spectrum, waterfall and receive audio start.
 
+For a **networked Icom**, choose **+ Add radio by IP**, select **Icom (network)** and enter the radio’s address and credentials. Click **Connect by IP**. Your location remembers the radio. On later visits, select it and click **Connect**. See [Networked Icom](./networked-icom.md).
+
 **Nearby radios** opens the full discovery list. Select a radio and click **Save selected radio to location**, then **‹ Back to Locations** to return to the launcher. Discovery continues as you browse locations. If nothing appears, use **Retry Discovery** or **Open Network Diagnostics** there.
 
 The list can also include:
@@ -57,6 +59,12 @@ After connecting, you'll see:
 - **Applet panel** (right) with the RX, TX, P/CW and other applets
 
 Controls that the connected radio cannot use are hidden or dimmed with a reason. Continue with [Your First Session](./your-first-session.md).
+
+To disconnect, click **Disconnect** in the connection window. On a local Flex
+connection, AetherSDR asks the radio to disable the old session's keepalive and
+waits for confirmation before closing. This prevents a delayed session timeout
+from interrupting your next connection. If the radio does not answer, this
+cleanup step waits at most two seconds before shutdown continues.
 
 ## Other Ways to Connect
 
@@ -95,6 +103,12 @@ The radio rejected AetherSDR's client registration (for example with error `F300
 
 1. Follow the message shown: typically another client must disconnect first, or the radio needs a restart.
 2. If the **Connected Stations** dialog appears, select a station and click **Disconnect Station**; see [Multi-Flex](./multi-flex.md).
+
+### Reconnect after an interruption
+
+The window stays responsive while an interrupted or canceled LAN connection
+finishes closing. If you reconnect during that cleanup, the new connection
+waits until the old connection has closed.
 
 ### Registration or client disconnection does not complete
 

@@ -1321,6 +1321,13 @@ double WdspChannel::meter(Meter which) const noexcept
     return GetRXAMeter(m_channelId, static_cast<int>(which));
 }
 
+double WdspChannel::txAlcReductionDbForTest() const noexcept
+{
+    if (m_config.direction != Direction::Transmit)
+        return std::numeric_limits<double>::quiet_NaN();
+    return GetTXAMeter(m_channelId, AETHER_WDSP_TXA_ALC_GAIN);
+}
+
 std::size_t WdspChannel::outputBlockSize() const noexcept
 {
     return m_outputBlockSize;
@@ -1347,6 +1354,15 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 uint64_t WdspChannel::threadAllocationSequenceForTest() noexcept
 {
     return wdspPortThreadAllocationSequence();
+}
+
+void WdspChannel::setRxPanelBinauralForTest(int channelId, int binaural) noexcept
+{
+    // WDSP indexes rxa[] with the id unchecked; -1 is wdspChannelId() before a
+    // channel opens.
+    if (channelId < 0 || channelId >= kWdspChannelCount)
+        return;
+    SetRXAPanelBinaural(channelId, binaural);
 }
 
 int WdspChannel::openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept
@@ -1642,6 +1658,10 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             return false;
         }
     }
+    if (config.rxPanelMono && config.direction != Direction::Receive) {
+        setError(error, "WDSP rxPanelMono is receive-only");
+        return false;
+    }
     const std::pair<const std::optional<double>&, const char*> panelGains[] = {
         {config.rxPanelGain, "WDSP rxPanelGain must be finite, non-negative and receive-only"},
         {config.fmRxPanelGain, "WDSP fmRxPanelGain must be finite, non-negative and receive-only"},
@@ -1820,6 +1840,9 @@ bool WdspChannel::open() noexcept
         }
         if (m_config.fmRxPanelGain) {
             SetRXAPanelGain1(m_channelId, rxPanelGainFor(m_config, m_config.mode));
+        }
+        if (m_config.rxPanelMono) {
+            SetRXAPanelBinaural(m_channelId, 0);
         }
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);

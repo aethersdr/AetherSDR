@@ -3,12 +3,12 @@ title: "AetherModem Packet Radio"
 slug: "/aethermodem-packet-radio"
 description: "AetherModem is AetherSDR's built-in AX.25 packet modem."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)", "RTL-SDR (experimental, receive-only)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)", "RTL-SDR (experimental, receive-only)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported), RTL-SDR (experimental, receive-only)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental), RTL-SDR (experimental, receive-only)
 
 :::
 
@@ -22,7 +22,7 @@ Open it from **Tools → AetherModem...**
 
 ### Window layout
 
-The window has seven tabs: **APRS**, **Digipeater**, **KISS TNC**, **Terminal**, **Mailbox**, **D-STAR** and **HF Data** (the D-STAR tab is covered on [D-STAR (ThumbDV)](./d-star-thumbdv.md) and is hidden on radios without waveform support). A slim status bar along the bottom shows the modem state, the receive gain and a packet-activity strip.
+The available tabs are **APRS**, **Digipeater**, **KISS TNC**, **Terminal**, **Mailbox**, **D-STAR**, **HF Data** and **HF Gateway** (the D-STAR tab is covered on [D-STAR (ThumbDV)](./d-star-thumbdv.md) and is hidden on radios without waveform support). **HF Data** appears in builds with the Data2G decoder. A slim status bar along the bottom shows the modem state, the receive gain and a packet-activity strip.
 
 The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS). It's a window of its own, with its own taskbar entry, so you can minimize it from the taskbar or park it on another monitor. **View → Frameless Window** does not apply to it. Closing only hides it: the KISS TNC, the mailbox and the APRS modem keep running, and reopening brings back the same window.
 
@@ -138,6 +138,22 @@ Data2G is beta software and its on-air protocol can still change. The tab shows 
 
 :::caution
 The monitor itself never transmits, but **Enable Modem** is shared with the rest of AetherModem. A beacon, digipeater, KISS client, terminal session or mailbox you have switched on can still transmit packet on the slice you are monitoring. Turn those off before you park the modem on a Data2G frequency.
+:::
+
+### HF Gateway
+
+The **HF Gateway** tab connects to external modems you run in a receive-only setup and shows their state. It requires the modem to acknowledge that automatic answering is off before showing it as connected.
+
+It works with any modem that has a VARA-style host interface: a command port plus a data port, usually 8300 and 8301. Examples are [Mercury](https://github.com/Rhizomatica/mercury), [Data2G](https://github.com/arodland/Data2G)'s `data2g-host`, or another VARA-compatible modem you have installed. AetherSDR doesn't include or start any of them: run the modem yourself, with its receive audio set to the slice's DAX channel.
+
+- **Add a modem.** Pick its kind, give it a name if you like, enter the host it runs on (normally `127.0.0.1`, this computer) and its command port, then **Add**. The data port is taken to be the next one up. The list is saved; it holds up to four modems.
+- **Connect.** Verify the modem is idle and configured for receive only. Select **Connect**, review **Confirm receive-only setup**, then select **Connect (receive only)**. Some modems accept one host program per port, so programs such as Winlink, Pat or BPQ may be unable to use the modem until you select **Disconnect**.
+- Each modem's row shows whether it's connected, the version it reports, whether its channel-busy detector says the channel is busy, and the last signal-to-noise figure. A modem on another computer is marked **Remote host**.
+- **Monitor** (Mercury only) turns on Mercury's passive monitor. It lists every connect request and CQ it hears in **HEARD**, without taking part in any session. It never transmits, but it uses several times Mercury's usual CPU, so it starts off.
+- **EVENTS** logs connections and anything worth noticing. If a modem reports that it's transmitting, the event log says so. The gateway didn't key the radio: check that modem's own PTT setting.
+
+:::caution
+Use an idle modem dedicated to receive only. Before connecting, disable its CAT, VOX and serial PTT, and route its transmit audio away from the radio. Opening or closing a host connection can end a session already running in the modem and cause the modem to send a final frame through its own transmit path.
 :::
 
 ### MQTT

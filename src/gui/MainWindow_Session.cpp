@@ -50,6 +50,7 @@
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
+#include "PanLayoutShrinkPolicy.h"
 #include "CatControlApplet.h"
 #include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
@@ -149,20 +150,6 @@ void MainWindow::refreshNetworkQualityIndicators()
 }
 
 namespace {
-QString defaultPanLayoutForCount(int panCount)
-{
-    static const QMap<int, QString> kDefaultLayouts = {
-        {1, QStringLiteral("1")},
-        {2, QStringLiteral("2v")},
-        {3, QStringLiteral("2h1")},
-        {4, QStringLiteral("2x2")},
-        {5, QStringLiteral("3h2")},
-        {6, QStringLiteral("2x3")},
-        {7, QStringLiteral("4h3")},
-        {8, QStringLiteral("2x4")}
-    };
-    return kDefaultLayouts.value(panCount, QStringLiteral("1"));
-}
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
 constexpr int kProfileLoadMinRenderableFrameBins = 128;
 
@@ -706,6 +693,8 @@ void MainWindow::wireDiscovery()
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(m_connPanel, &ConnectionPanel::remoteEngineRestored,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
 
     // aetherd Gap B (Step 2b-2): Hermes-Lite 2 radios answer HPSDR discovery on
     // UDP/1024, which the Flex discovery above never sees. Feed them into the
@@ -1368,13 +1357,10 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
     const quint64 generation = ++m_experimentalRadioSupportGeneration;
 
     // The Icom transport is connected before CI-V 19 00 identifies the radio.
-    // Showing the family-wide warning on that first edge makes an IC-7300MK2
-    // flash an EXPERIMENTAL badge and modal before its verified 0xB6 identity
-    // arrives. Keep the chrome quiet while identity is in flight. If the radio
-    // never identifies, fall back to the family warning after the backend's
-    // five-attempt discovery window so an unknown Icom is not promoted by
-    // omission. A wake reconnect retries identity for far longer, so it holds
-    // until the wake ends instead (see the radioWakeProgress hook).
+    // Wait for verified identity before showing a badge or notice on connect.
+    // If identity is still unknown after the backend's five discovery attempts,
+    // show the family warning. A wake reconnect retries identity for longer,
+    // so wait until the wake ends (see the radioWakeProgress hook).
     const ExperimentalRadioIdentityHold hold = connected
         ? experimentalRadioIdentityHold(family, model,
                                         m_radioModel.radioWakeActive(),
@@ -2068,10 +2054,12 @@ void MainWindow::wireRadioModel()
             }
         });
         m_iambicKeyer->setOnRoutedKeyDownChange([this](bool down,
-                std::chrono::steady_clock::time_point when, const TxCoordinator::Request& input) {
+                std::chrono::steady_clock::time_point when, std::chrono::steady_clock::time_point releaseAt,
+                const TxCoordinator::Request& input) {
             m_radioModel.queueProducerCwKeyEdge(input, down, QStringLiteral("cw:iambic-keyer"),
                 m_lastCwPaddleTraceId.load(std::memory_order_relaxed),
-                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when);
+                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when,
+                /*hostTextGates=*/false, {}, releaseAt);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -2854,7 +2842,7 @@ void MainWindow::wirePanLifecycle()
                         .value("PanadapterLayout", "1").toString();
                     const QString layoutId = panCountForLayoutId(saved) == panCount
                         ? saved
-                        : defaultPanLayoutForCount(panCount);
+                        : PanLayoutShrinkPolicy::defaultLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
                         .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
@@ -3014,7 +3002,7 @@ void MainWindow::wirePanLifecycle()
         // to avoid leaving empty nested splitter cells behind.
         int remaining = m_panStack->count();
         if (remaining > 1) {
-            m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));
+            m_panStack->rearrangeLayout(PanLayoutShrinkPolicy::defaultLayoutForCount(remaining));
         }
     });
 
@@ -3485,6 +3473,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     // Provably null here: the early return above covers every live server,
     // listening or still waiting for its token.
     m_automation = std::make_unique<AutomationServer>();
+    connect(m_automation.get(), &AutomationServer::agentActivityChanged,
+            this, &MainWindow::agentActivityChanged);
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type
@@ -3547,6 +3537,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setSerialSnapshotHandler(
+        [this]() { return automationSerialSnapshot(); });
     m_automation->setTitleBarSnapshotHandler(
         [this]() { return automationTitleBarSnapshot(); });
     m_automation->setTitleBarActionHandler(

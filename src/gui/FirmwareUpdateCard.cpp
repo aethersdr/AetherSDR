@@ -522,8 +522,10 @@ void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bo
         const QPointer<FirmwareUpdateCard> self(this);
         const QString question =
             unverifiedDownload
-                ? tr("FlexRadio's MD5 hash for this installer could not be downloaded, so the "
-                     "firmware's integrity was NOT checked.\n\nUpload %1 to %2 anyway?\n\n"
+                ? tr("FlexRadio's MD5 hash for this installer could not be found, so the "
+                     "firmware's integrity was NOT checked. This is not expected: the "
+                     "firmware log says which step failed, and it is worth reporting.\n\n"
+                     "Upload %1 to %2 anyway?\n\n"
                      "The radio will reboot after the update.\nDo not disconnect during the upload.")
                 : tr("Upload %1 to %2?\n\nThe radio will reboot after the update.\n"
                      "Do not disconnect during the upload.");

@@ -115,6 +115,8 @@ up front.
 - **Platform-specific native integration** that touches shared code
   (e.g., embedding AppKit chrome into `MainWindow`)
 - **New feature areas** substantially beyond the current scope
+- **A TCI extension** beyond the shipping TCI 2.1 spec; the RFC and its PR
+  supply the items in [AGENTS.md](AGENTS.md) §"TCI extensions beyond TCI 2.1"
 
 When in doubt, open an RFC issue first and ask.
 

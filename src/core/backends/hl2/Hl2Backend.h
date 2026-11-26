@@ -30,6 +30,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -125,7 +126,12 @@ public:
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
+    // While keyed, a move of transmit to another slice is refused (see
+    // refuseTransmitChangeWhileKeyed), and a caller's completion is refused too.
     void setTxSlice(int sliceId) override;
+    ReceiveDispatch requestTxSlice(int sliceId, bool enabled,
+                                   const RadioControlCompletion& completion,
+                                   const RadioControlFence& current) override;
     void setActiveSlice(int sliceId) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
@@ -233,7 +239,8 @@ public:
     //             needs a measured wideband headroom reading; arms the bandscope gate.
     // "ramp"      3-6 dB attack, 1 dB release on a dwell.
     // "probe"     probingReleaseConfig(): 6 dB both ways; failed probes double the
-    //             interval. What "bandscope" degenerates to without the measurement.
+    //             interval. "bandscope" without the measurement, and a release is
+    //             believed after 3 s clean rather than 30 s.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
     // "default" names the law a backend starts with. A chosen law and floor are
@@ -364,6 +371,9 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Keys the backend's own modulator socket-free, for
+    // hl2_tx_keyed_mode_change_test's refusals while keyed.
+    friend struct Hl2TxKeyedChangeTestAccess;
     friend struct Hl2RxGainDuringTxTestAccess;
     // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
     friend struct Hl2HwSetTailTestAccess;
@@ -390,6 +400,22 @@ private:
     HealthSnapshot healthSnapshot(std::int64_t nowNs) const;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
+    // True while the HL2 is keyed (host key, tune, or the radio's own PTT).
+    bool transmitKeyed() const { return m_keyed || m_tuning || m_radioPtt; }
+    // While keyed, a change to the transmitter's mode, passband or slice is
+    // refused, not held or switched live: TXA swaps a bandpass mask at a block
+    // boundary, so a mid-over swap splatters, and a held one would leave the
+    // slice showing a mode the transmitter is not sending. Tells the operator
+    // (transmitChangeRefused) and returns true when it refuses.
+    bool refuseTransmitChangeWhileKeyed(int sliceId, const QString& message);
+    // setCwKeying()'s body. A scheduled edge's instant, and a key-down's own
+    // release instant, ride to MetisClient, which places them on the EP2
+    // sample clock (#5065).
+    void keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
+                   const TxCoordinator::Operation& operation,
+                   const TxCoordinator::Completion& completion,
+                   std::chrono::steady_clock::time_point scheduledAt,
+                   std::chrono::steady_clock::time_point releaseAt);
     void invalidateTxDspConfiguration();
     // dspChains() is a read of m_dspChains, which the I/O thread fills by queued
     // hop. request*() coalesces to one gather per event-loop turn, posted behind
@@ -528,6 +554,11 @@ private:
     // Field::TxAntenna: "ANT" or "RF1". Every outcome republishes the actual
     // route on every slice; a refusal also raises configurationWarning.
     ReceiveDispatch requestTxRoute(const QString& token);
+    // The same condition requestTxRoute() refuses on: the tail counts.
+    bool transmitPathBusy() const override
+    {
+        return m_keyed || m_radioPtt || m_tuning || m_txTailPending;
+    }
     void applyTxRoute(hl2::TxRoute next);
     void refuseTxRoute(const QString& why);
     void onMetisTxRouteRefused(int actual);
@@ -795,6 +826,12 @@ private:
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
     // Re-run one receiver's tune after its RIT changed.
     void retuneReceiver(int ddc);
+    // After transmit moved without setTxSlice(): the new owner's tune, mode and
+    // TX passband reach the transmitter.
+    void handTransmitToOwner();
+    // handTransmitToOwner() once nothing keys the radio: a keyed TX receiver
+    // whose DSP failed owes it (m_txHandoverOwed) until the unkey.
+    void settleTxHandover();
     // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
     [[nodiscard]] static int clampRitXit(const char* what, int hz);
     // qCInfo naming the receiver and slice an RIT/XIT change landed on.
@@ -1217,6 +1254,7 @@ private:
     TxCoordinator::Operation m_cwHangOperation;
     TxCoordinator::Operation m_lastTxOperation;
     TxCoordinator::Completion m_cwHangCompletion;
+    int m_cwHangDelayMs = 0;   // the configured hang, without the scheduled-edge lead
     bool m_txMonitor = false;
     // The receive-audio hold flag, read by mixReceiverAudio() and mirrored to every
     // Hl2RxDsp by applyRxAudioMute(). Not (m_keyed && !m_txMonitor): on key-up it
@@ -1242,6 +1280,8 @@ private:
     int m_txTailHoldMs = kTxTailHoldMs;
     QTimer* m_txTailTimer = nullptr;
     bool m_txTailPending = false;
+    // A hand-off to the new TX owner waits for the unkey (settleTxHandover()).
+    bool m_txHandoverOwed = false;
     // The drive register holds a tune level; the operator's RF drive is owed
     // once no tune carrier or tail is radiating.
     bool m_rfDriveOwed = false;
@@ -1391,11 +1431,11 @@ private:
     // setKeying()'s unkey mic diagnostic. The ALC only reduces, so the mic peak is
     // the on-air level up to this target. Seeded with Config's default as a literal
     // (Hl2TxDsp is forward-declared); a static_assert in Hl2Backend.cpp pins them.
-    double m_alcTargetPeak = 0.85;
+    double m_alcTargetPeak = 0.95;
 
     // The AGC threshold -> WDSP gain ceiling map is
-    // Hl2DbReference::kAgcCeilingDbPerUnit via m_dbRef.agcCeilingDb(), so the
-    // ceiling is referred to LNA gain like the displayed dBm.
+    // Hl2DbReference::agcCeilingDbAtReference() via m_dbRef.agcCeilingDb(), so
+    // the ceiling is referred to LNA gain like the displayed dBm.
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.

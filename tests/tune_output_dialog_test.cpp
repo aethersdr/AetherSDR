@@ -65,7 +65,7 @@ struct Fixture {
         auto owned = std::make_unique<ConnectedFlex>();
         backend = owned.get();
         backend->setFirmwareVersionProvider([this] { return version; });
-        backend->setCommandSink([this](const QString& command, FlexBackend::CommandReply reply) {
+        backend->setCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply) {
             commands.append(command);
             if (reply) { replies.append(std::move(reply)); }
             return true;

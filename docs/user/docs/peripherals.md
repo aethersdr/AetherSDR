@@ -190,11 +190,31 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 - An **IP address** field and **Connect** reach a device that discovery cannot
   see (remote, VPN). Remote devices usually need an access code; see
   [Access codes](#access-codes-auth).
-- **Port A** and **Port B** each show the current band and antenna and a grid
-  of antenna buttons. Click to select; click the selected antenna again to
-  deselect it. Port B is hidden on a single-port device.
-- An antenna held by the other port is dimmed and cannot be selected. Antennas
-  that are receive-only on the current band are marked `RX`.
+- By default, one four-column antenna grid is shown per port. It tracks the
+  RX selection and permits receive-only antennas; selecting an antenna also
+  updates TX when it has TX permission on the current band. Click the selected
+  antenna again to clear both selections for the session; that deselection is
+  not recalled when returning to the band.
+- Turn on **Split RX/TX** to add separate two-column RX and TX grids. This lets
+  a receive-only antenna stay selected while transmission uses a different,
+  transmit-permitted antenna. Click a selected antenna again to deselect only
+  that direction. A deselection in Split mode is recalled for that direction
+  and band.
+- Port B is hidden on a single-port device.
+- A new TX antenna can be selected only when the port's band is known and the
+  antenna is permitted for TX on that band. If the band is unknown, the
+  default grid changes RX without changing the current TX antenna.
+- An antenna held by the other radio port is dimmed and cannot be selected.
+  In split mode, antennas not permitted for the relevant direction on the
+  current band are disabled. The default grid dims antennas without RX
+  permission but leaves them clickable. RX and TX choices are recalled
+  independently per band.
+- Antenna changes are refused while the port reports `tx=1`; the status line
+  briefly displays **Antenna can't change while transmitting.**
+- If initial antenna or port status is incomplete, the applet retries and
+  skips the initial recall. It retries up to three times, five seconds apart;
+  after that, the status line asks you to reconnect. Until port status arrives,
+  selections that cannot be checked against the other port are blocked.
 - **AUTO** per port turns the device's own auto mode on or off for that port.
 
 ## Reference
@@ -210,7 +230,7 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | ACOM Amplifier | Serial (9600 8N1) or a ser2net host in raw mode | 7000 |
 | SPE Expert Amplifier | Serial (115200 8N1) or a ser2net host | 7000 |
 | VK3AMP Amplifier | TCP control, UDP telemetry | 5005 (UDP 5010) |
-| Elecraft KPA1500 | TCP | 1500 |
+| Elecraft KPA1500 | TCP or UDP | 1500 |
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1), a ser2net host in raw mode, or the radio's USB port (Radio USB) | 2000 |
 

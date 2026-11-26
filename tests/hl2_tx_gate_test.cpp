@@ -861,7 +861,8 @@ static void testRekeyRunsSkippedCleanup()
         backend.setKeying(true, a, {});
         backend.submitTxAudio(loud, 24000, AetherSDR::TxAudioSource::Microphone,
                               tx.coordinator.mediaContext(mic, a));
-        check(Hl2TxGateTestAccess::txAlcGainDb(backend) < -0.5, premise);
+        // 32000/32768 peaks against the 0.95 target: the ALC reduces 0.24 dB.
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) < -0.1, premise);
         QSemaphore gate;
         if (skipCleanup) {
             Hl2TxGateTestAccess::holdIoThread(backend, gate);

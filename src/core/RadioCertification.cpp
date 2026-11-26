@@ -16,6 +16,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMap>
 #include <QScopeGuard>
@@ -800,6 +801,21 @@ QJsonValue msOrNull(int index)
 
 }  // namespace
 
+// While SQL is off, Icom retains the manual threshold in the RX applet.
+// Reapply it as a manual choice before turning SQL off so later radio echoes
+// and reconnects use the operator's threshold.
+static void restoreProbedSquelch(QPointer<SliceModel> slice, bool on, int level, int manual)
+{
+    if (!slice) { return; }
+    if (!on && slice->manualSquelchLevel() != manual) {
+        slice->setManualSquelch(true, manual);
+    }
+    if (slice) {
+        slice->setSquelch(on, level);
+        if (slice) { slice->setManualSquelchLevel(manual); }
+    }
+}
+
 void RadioCertification::stageControlDomain(const Options& o)
 {
     // A SCALED CONTROL READS BACK WHERE IT WAS WRITTEN, ACROSS ITS WHOLE RANGE.
@@ -933,8 +949,7 @@ void RadioCertification::stageControlDomain(const Options& o)
         const auto restore = qScopeGuard([&] {
             if (!slice)
                 return;
-            slice->setSquelch(onWas, levelWas);
-            slice->setManualSquelchLevel(manualWas);
+            restoreProbedSquelch(slice, onWas, levelWas, manualWas);
             spin(600);
         });
         QJsonObject sql = sweep(QStringLiteral("squelch"), 100,
@@ -1066,10 +1081,10 @@ void RadioCertification::stageFrontEndInterlock()
             if (otherSettled > certmath::kCoupledSettleBudgetMs) {
                 problems << QStringLiteral(
                     "writing %1 %2 moved the %3 from %4 to %5 on the radio, and the "
-                    "pan showed it after %6 ms — at a periodic poll, not a read "
-                    "after the write")
+                    "pan showed it after %6 ms (budget %7 ms). Inspect the CI-V "
+                    "transaction trace to identify the delayed readback.")
                     .arg(written).arg(t.step).arg(coupledName).arg(otherBefore)
-                    .arg(otherAfter).arg(otherSettled);
+                    .arg(otherAfter).arg(otherSettled).arg(certmath::kCoupledSettleBudgetMs);
             }
         }
     }
@@ -1188,8 +1203,7 @@ void RadioCertification::stageSquelchScale(const Options& o)
     const auto restore = qScopeGuard([&] {
         if (!slice)
             return;
-        slice->setSquelch(onWas, levelWas);
-        slice->setManualSquelchLevel(manualWas);
+        restoreProbedSquelch(slice, onWas, levelWas, manualWas);
         slice->setMode(modeWas);
         slice->setFrequency(freqWas);
         spin(800);
@@ -1308,6 +1322,9 @@ void RadioCertification::stageSquelchScale(const Options& o)
     const double sLevel = levels.value(QStringLiteral("sLevelDbm")).toDouble(-999.0);
     if (!std::isfinite(peakDb)) {
         inconclusive = QStringLiteral("no pan bins near the carrier — is it on the pan?");
+    } else if (!std::isfinite(floorDb) || peakDb <= floorDb) {
+        inconclusive = QStringLiteral("the reference peak does not rise above the pan floor; "
+                                      "a steady carrier is needed to measure the SQL line");
     } else if (sLevel > certmath::kS9Dbm) {
         // Above S9 Flex's scale and the MK2's measured one miss the gate by
         // similar amounts, so a pass here would certify either.
@@ -2518,21 +2535,32 @@ void RadioCertification::stageDspLiveness(const Options& o)
         tone->setLevelDb(-20.0f);
         tone->setEnabled(true);
     }
-    keyViaOperatorPath(true);
+    QElapsedTimer keyWindow;
+    keyWindow.start();
+    const bool keyConfirmed = keyViaOperatorPath(true);
     spin(o.settleMs);
-    const QJsonObject meters = meterSnapshot();
+    QJsonObject meters = meterSnapshot();
+    const qint64 elapsedMs = keyWindow.elapsed();
+    const bool keyedAtSample = keyConfirmed && keyedNow();
     keyViaOperatorPath(false);
     if (auto* tone = m_audio->clientTxTestTone())
         tone->setEnabled(false);
     spin(800);
 
-    const double micPeak = meters.value(QStringLiteral("micPeakDbfs")).toDouble(-140.0);
+    const QJsonValue micPeak = meters.value(QStringLiteral("micPeakDbfs"));
+    const qint64 ageMs = meters.value(QStringLiteral("micPeakDbfsAgeMs")).toInteger(-1);
+    meters[QStringLiteral("keyConfirmed")] = keyConfirmed;
     QString concern;
-    if (micPeak <= -139.0)
-        concern = QStringLiteral(
-            "no audio reached the modulator. The chain is broken ABOVE the DSP: "
-            "either capture is not running, or the TX audio callback is gated on "
-            "something this backend never satisfies");
+    if (!keyedAtSample || !micPeak.isDouble() || ageMs < 0 || ageMs >= elapsedMs
+        || meters.value(QStringLiteral("micPeakDbfsStale")).toBool()) {
+        meters[QStringLiteral("micPeakDbfs")] = QJsonValue::Null;
+        concern = keyedAtSample
+            ? QStringLiteral("INCONCLUSIVE — no fresh TX:MICPEAK sample during this key")
+            : QStringLiteral("INCONCLUSIVE — the transmitter was not keyed at the measurement");
+    } else if (micPeak.toDouble() <= -139.0) {
+        concern = QStringLiteral("TX:MICPEAK stayed at its floor during the keyed test tone; "
+                                 "check the input route and TX audio capture");
+    }
 
     record(QStringLiteral("dsp-liveness"),
            QStringLiteral("Audio reaches the modulator"),
@@ -2648,6 +2676,17 @@ void RadioCertification::stageSideband(const Options& o)
     if (!m_audio || !m_radio || !o.includeAudioProbe)
         return;
 
+    // Icom's 16 45 selects the radio's MONI audio. A tone at the output
+    // tap cannot distinguish that path from an independently tuned receiver.
+    if (m_radio->family() == QLatin1String("icom")) {
+        record(QStringLiteral("sideband"), QStringLiteral("Transmit/receive sideband agreement"),
+               QJsonObject{{QStringLiteral("txRxSidebandAgree"), QJsonValue::Null}},
+               QStringLiteral("Icom routes transmitter monitor audio to this capture."),
+               QStringLiteral("INCONCLUSIVE — use a separate receiver to verify transmitted sideband"),
+               QStringLiteral("docs/HERMES.md 14.6"));
+        return;
+    }
+
     // Sideband check: demodulate our own transmission. A 1 kHz USB tone received
     // in USB must return 1 kHz; an inverted TX lands in LSB instead. The
     // panadapter can't answer this (raw wire order agrees with the transmitter by
@@ -2665,16 +2704,18 @@ void RadioCertification::stageSideband(const Options& o)
         // reason this stage can unwind early is a teardown mid-run, which is
         // also what would leave m_radio dangling.
         if (m_radio) {
-            m_radio->transmitModel().setRfPower(restorePower);
-            m_radio->setTxAudioMonitor(false);
             keyViaOperatorPath(false);
+            m_radio->setTxAudioMonitor(false);
+            m_radio->transmitModel().setRfPower(restorePower);
         }
         if (m_audio) {
             if (auto* t = m_audio->clientTxTestTone())
                 t->setEnabled(false);
         }
     });
-    tx.setRfPower(kSidebandProbePowerPercent);
+    const int probeCeiling = o.maxRfPowerPercent >= 0
+        ? std::min(o.maxRfPowerPercent, kSidebandProbePowerPercent) : kSidebandProbePowerPercent;
+    tx.setRfPower(std::min(restorePower, probeCeiling));
     spin(600);
 
     // Each capture reports the rate it ACTUALLY saw, in its own out-parameter.
@@ -2898,35 +2939,44 @@ void RadioCertification::stageCarrierSuppression(const Options& o)
     // substantial is modulator DC offset. Mic gain goes to zero because the ALC
     // lifts room noise into real modulation otherwise.
     const int restoreGain = m_audio->pcMicGain();
-    if (m_audio)
-        m_audio->setPcMicGain(0);
+    m_audio->setPcMicGain(0);
     spin(600);
-    keyViaOperatorPath(true);
+    QElapsedTimer keyWindow;
+    keyWindow.start();
+    const bool keyConfirmed = keyViaOperatorPath(true);
     spin(o.settleMs);
     const QJsonObject keyedSilent = meterSnapshot();
+    const QJsonObject gauges = renderedSnapshot();
+    const qint64 powerAgeMs = gauges.value(QStringLiteral("fwdPowerAgeMs")).toInteger(-1);
+    const bool havePower = keyConfirmed && keyedNow() && powerAgeMs >= 0
+        && powerAgeMs < keyWindow.elapsed() && gauges.value(QStringLiteral("fwdPowerLive")).toBool();
+    const QJsonValue watts = havePower ? gauges.value(QStringLiteral("fwdPowerWatts")) : QJsonValue();
     keyViaOperatorPath(false);
     if (m_audio)
         m_audio->setPcMicGain(restoreGain);
     spin(800);
 
     QJsonObject m{{QStringLiteral("keyedWithNoAudio"), keyedSilent},
+                  {QStringLiteral("keyConfirmed"), keyConfirmed},
+                  {QStringLiteral("fwdPowerWatts"), watts},
+                  {QStringLiteral("fwdPowerAgeMs"), powerAgeMs},
                   {QStringLiteral("micGainDuringTest"), 0},
                   {QStringLiteral("micGainRestoredTo"), restoreGain}};
     QString concern;
-    const bool freshSwr = keyedSilent.contains(QStringLiteral("swr"))
-                       && !keyedSilent.contains(QStringLiteral("swrStale"));
-    if (freshSwr)
-        concern = QStringLiteral(
-            "the radio reported forward power while keyed with NO audio. In SSB "
-            "that is a carrier — most likely a DC offset in the modulator, or "
-            "audio left over from a previous transmission that was not flushed");
+    if (!watts.isDouble()) {
+        concern = QStringLiteral("INCONCLUSIVE — no fresh keyed forward-power measurement");
+    } else if (watts.toDouble() > kKeyedRfFloorWatts) {
+        concern = QStringLiteral("the forward-power meter reads %1 W with PC microphone "
+                                 "gain at zero; verify the active modulation source and RF output")
+                      .arg(watts.toDouble(), 0, 'g', 4);
+    }
 
     record(QStringLiteral("carrier-suppression"),
            QStringLiteral("Keyed with no audio produces no carrier"),
            m,
            QStringLiteral(
-               "SSB should be silent when the operator is. A reading here is "
-               "either a DC-offset carrier or an unflushed transmit queue."),
+               "Forward power is sampled at the end of the silent key. The radio meter's "
+               "resolution limits the residual carrier it can detect."),
            concern,
            QStringLiteral("docs/HERMES.md 14.1; queue flush on unkey"));
 }
@@ -2942,14 +2992,12 @@ void RadioCertification::stageLifecycle(const Options&)
     // the tail of a transmission playing back after it ended.
     const QString title = QStringLiteral("Receive muting across the transmit cycle");
     const QString observation = QStringLiteral(
-        "Zero bytes during transmit is what is wanted. A non-zero count "
-        "AFTER unkey that greatly exceeds the before-key rate would "
-        "indicate a drained backlog rather than a resumed stream.");
+        "The output tap may continue delivering silent PCM during transmit. "
+        "The peak across all channels shows whether those samples contained a signal.");
     const QString reference = QStringLiteral("docs/HERMES.md 14.1; RX mute at the demodulator");
     const QStringList output{QStringLiteral("output")};
 
-    // Zero bytes during transmit is the PASS condition, so every window must
-    // have been armed and the receiver keyed, or silence certifies muting.
+    // A missing stream and a muted stream look alike without a working RX baseline.
     QString captureError;
     if (!armCapture(1200, output, &captureError)) {
         record(QStringLiteral("lifecycle"), title,
@@ -2958,7 +3006,7 @@ void RadioCertification::stageLifecycle(const Options&)
         return;
     }
     spin(1400);
-    const QJsonObject before = m_audio->automationAudioCaptureSnapshot(false);
+    const QJsonObject before = m_audio ? m_audio->automationAudioCaptureSnapshot(false) : QJsonObject{};
     const auto bytes = [](const QJsonObject& o) {
         return o.value(QStringLiteral("capturedBytes")).toInt();
     };
@@ -2992,16 +3040,27 @@ void RadioCertification::stageLifecycle(const Options&)
     spin(600);
     const bool duringArmed = armCapture(1200, output, &captureError);
     spin(duringArmed ? 1400 : 0);
-    const QJsonObject during = m_audio->automationAudioCaptureSnapshot(false);
     keyViaOperatorPath(false);
+    const QJsonObject during = m_audio ? m_audio->automationAudioCaptureSnapshot(true) : QJsonObject{};
+    double peak = 0.0;
+    for (const QJsonValue& chunk : during.value(QStringLiteral("chunks")).toArray()) {
+        const QByteArray pcm = QByteArray::fromBase64(
+            chunk.toObject().value(QStringLiteral("pcmBase64")).toString().toLatin1());
+        const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+        for (qsizetype i = 0; i < pcm.size() / qsizetype(sizeof(float)); ++i) {
+            peak = std::max(peak, std::abs(static_cast<double>(samples[i])));
+        }
+    }
 
     const bool afterArmed = duringArmed && armCapture(1200, output, &captureError);
     spin(afterArmed ? 1400 : 0);
-    const QJsonObject afterUnkey = m_audio->automationAudioCaptureSnapshot(false);
+    const QJsonObject afterUnkey = m_audio ? m_audio->automationAudioCaptureSnapshot(false) : QJsonObject{};
 
     QJsonObject m{
         {QStringLiteral("rxBytesBeforeKey"), bytes(before)},
         {QStringLiteral("rxBytesDuringTx"), duringArmed ? QJsonValue(bytes(during)) : QJsonValue()},
+        {QStringLiteral("rxPeakDuringTx"), duringArmed && bytes(during) > 0
+             ? QJsonValue(peak) : QJsonValue()},
         {QStringLiteral("rxBytesAfterUnkey"),
          afterArmed ? QJsonValue(bytes(afterUnkey)) : QJsonValue()},
         {QStringLiteral("keyConfirmed"), true},
@@ -3011,15 +3070,13 @@ void RadioCertification::stageLifecycle(const Options&)
     if (!duringArmed || !afterArmed) {
         m[QStringLiteral("captureError")] = captureError;
         concern = captureUnavailableConcern(captureError);
-    } else if (bytes(during) > 0) {
-        concern = QStringLiteral(
-            "receive audio was still flowing during transmit. The operator will "
-            "hear their own carrier as fuzz and their own voice as feedback, and "
-            "with an open microphone that closes an acoustic loop that corrupts "
-            "the transmitted audio");
     } else if (bytes(afterUnkey) == 0) {
         concern = QStringLiteral(
             "receive audio did not resume after unkey");
+    } else if (peak > 0.0) {
+        concern = QStringLiteral("output samples peaked at %1 dBFS during transmit; "
+                                 "check RX muting and monitor routing")
+                      .arg(db(peak), 0, 'f', 1);
     }
 
     record(QStringLiteral("lifecycle"), title, m, observation, concern, reference);
@@ -3102,7 +3159,7 @@ QJsonObject RadioCertification::run(const Options& o)
 
     // EVERYTHING ABOVE IS RESTORED BY THIS ONE GUARD, INCLUDING THE UNKEY.
     //
-    // The unkey/tone/monitor half used to be straight-line code at the end of
+    // The unkey/tone cleanup used to be straight-line code at the end of
     // run(). There is no reachable path past it today, but the failure mode if
     // one were ever added is uniquely bad on this verb: an early return would
     // leave the radio KEYED, and the same missed epilogue would leave the
@@ -3118,7 +3175,6 @@ QJsonObject RadioCertification::run(const Options& o)
         if (quindar)
             quindar->setEnabled(quindarWas);
         if (m_radio) {
-            m_radio->setTxAudioMonitor(false);
             if (powerToRestore >= 0)
                 m_radio->transmitModel().setRfPower(powerToRestore);
             // ...and back on the operator's frequency and mode, not ours.

@@ -15,6 +15,7 @@
 
 #include "MainWindowHelpers.h"
 #include "StatusBarLayout.h"
+#include "AgentControlBadge.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
@@ -53,6 +54,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "PanLayoutShrinkPolicy.h"
 #include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -549,7 +551,7 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 
 // panCountForLayoutId moved to MainWindowHelpers (#3351 Phase 1c).
 
-// defaultPanLayoutForCount moved to MainWindow_Session.cpp (#3351 Phase 2c).
+// defaultPanLayoutForCount moved to PanLayoutShrinkPolicy::defaultLayoutForCount.
 
 
 // xvtrPolicyBandsFrom / xvtrListSummary / xvtrForBandSummary moved to
@@ -2709,6 +2711,12 @@ MainWindow::~MainWindow()
 
     preparePanadapterUiForShutdown();
 
+    // ~AutomationServer clears a held agent claim, and the status-row slot reads
+    // members that are gone by the time m_automation is destroyed.
+    if (m_automation)
+        QObject::disconnect(m_automation.get(), &AutomationServer::agentActivityChanged,
+                            this, &MainWindow::agentActivityChanged);
+
     // KiwiSDR profile clients are QObject children, but their disconnect path emits
     // state changes that are wired back into MainWindow and AudioEngine. Tear
     // them down while MainWindow members are still alive instead of waiting for
@@ -2755,6 +2763,15 @@ MainWindow::~MainWindow()
         ShutdownTrace trace("ax25.dialog.destroy");
         delete m_ax25HfPacketDecodeDialog.data();
         m_ax25HfPacketDecodeDialog = nullptr;
+    }
+
+    // ~AgcCalibrationDialog stops a running sweep, and onFinished() rewires
+    // the audio source through raw TciServer and AudioEngine pointers. Both
+    // are freed below, before deleteChildren() would reach the dialog.
+    if (m_agcCalibrationDialog) {
+        ShutdownTrace trace("agc_calibration.dialog.destroy");
+        delete m_agcCalibrationDialog.data();
+        m_agcCalibrationDialog = nullptr;
     }
 
 #ifdef HAVE_WEBSOCKETS
@@ -3716,7 +3733,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        queueSerialPortSettings();
         auto& fcs = AppSettings::instance();
         const bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
         const QString fcPort = fcs.value("FlexControlPort").toString();
@@ -3764,6 +3781,8 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     dlg->setFlexControlConnectionStatus(
         m_flexControlConnected,
         m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
+    dlg->setSerialPortConnectionStatus(m_serialPortOpen, m_serialPortDevice,
+                                       m_serialPortError);
 #endif
     // VK3AMP hardware variant changed in Peripherals settings -- rescale
     // the live forward-power gauge to match (see RadioSetupDialog.h's own
@@ -3783,7 +3802,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     connect(dlg, &QDialog::finished, this, [this, prevComp]() {
 #ifdef HAVE_SERIALPORT
         // Re-load serial port settings if changed (on worker thread)
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        queueSerialPortSettings();
         // Re-check FlexControl open/close state
         auto& fcs = AppSettings::instance();
         bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
@@ -4858,7 +4877,11 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
     // A canon dialog, so not showOrRaisePersistent(): that applies View →
     // Frameless Window, which a CanonWindow does not follow.
     if (!m_agcCalibrationDialog) {
-        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+#ifdef HAVE_WEBSOCKETS
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, tciServer(), floorFn, this);
+#else
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, nullptr, floorFn, this);
+#endif
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_agcCalibrationDialog = dlg;
     }
@@ -5707,7 +5730,7 @@ void MainWindow::buildUI()
     auto* splitter = m_splitter;
 
     // Connection panel — a modeless CanonWindow dialog, always frameless.
-    m_connPanel = new ConnectionPanel(this);
+    m_connPanel = new ConnectionPanel(this, ConnectionPanel::RemoteDiscovery::Enabled);
     // Sizing belongs to the panel now. It sets these same two values in its own
     // constructor and then adjusts them per screen in fitToScreen(), which
     // every show path here runs first — a hardcoded pair at this level went
@@ -6111,27 +6134,15 @@ void MainWindow::buildUI()
         return sep;
     };
 
-    // Automation indicator chip — visible ONLY when the agent automation bridge
-    // is active (AETHER_AUTOMATION). Uses the canonical AppSettings automation
-    // agent name so the chip and tooltip match the identity announced to the
-    // radio. Legacy environment names are resolved by AppSettings. (#3646)
-    // Kept deliberately separate from the station-nickname label so it never
-    // fights radio status updates.
-    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-        const QString agent = AppSettings::instance().automationAgentName();
-        m_automationChip = new QLabel(QStringLiteral("\U0001F916 ") + agent);
-        m_automationChip->setObjectName(QStringLiteral("automationChip"));
-        m_automationChip->setAccessibleName(
-            QStringLiteral("Agent automation bridge active: %1").arg(agent));
-        m_automationChip->setStyleSheet(
-            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
-            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
-        m_automationChip->setToolTip(
-            QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
-                .arg(agent));
-        hbox->addWidget(m_automationChip);
-        addSep();
-    }
+    auto* orbit = new AgentControlBadge(m_statusBarContainer);
+    hbox->addWidget(orbit);
+    connect(this, &MainWindow::agentActivityChanged, orbit,
+            [this, orbit](const QString& activity, const QString& agent) {
+                const bool wasHidden = orbit->isHidden();
+                orbit->showActivity(activity, agent);
+                if (wasHidden != orbit->isHidden())
+                    updateStatusBarMinimumWidth();
+            });
 
     // Hidden connection state label (used by connect/disconnect logic)
     m_connStatusLabel = new QLabel("", this);
@@ -6895,6 +6906,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
+    // The link flag is per radio: reread it for the session's radio on each edge.
+    reloadLinkPanDisplayRates();
 
     // Band/segment zoom reads the backend's declared control contract. Native
     // span zoom also waits for radio-reported pan limits before enabling.
@@ -8580,6 +8593,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
 }
 
+bool MainWindow::panWnbSupported() const
+{
+    if (!m_radioModel.isConnected()) { return true; }
+    const auto controls = m_radioModel.backendCapabilities().panDisplayControl;
+    return controls && controls->supports(PanDisplayField::Wnb)
+        && controls->supports(PanDisplayField::WnbLevel);
+}
+
 // Takes the WIDGET, not just its menu, because the waterfall auto-black gate has
 // to reach both and they must never disagree about whether HW exists — the menu
 // decides what the button shows, the widget decides what actually renders.
@@ -8591,7 +8612,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
-        menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
+        menu->setWnbAvailability(m_radioModel.hasRadioSideDsp(), panWnbSupported());
         // The Black Level button's HW position, which is a radio-side display
         // computation rather than radio-side audio DSP — so it needs its own
         // capability, not a ride on hasRadioSideDsp. (#4606)
@@ -11325,9 +11346,9 @@ void MainWindow::showMnrSettings()
     }
 }
 
-void MainWindow::applyPanLayout(const QString& layoutId)
+QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previousLayout)
 {
-    if (!m_radioModel.isConnected()) return;
+    if (!m_radioModel.isConnected()) return previousLayout;
     ++m_panLayoutRequestGeneration;
 
     const int needed = panCountForLayoutId(layoutId);
@@ -11354,32 +11375,31 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 removalCandidates.append(applet->panId());
             }
         }
-        int toRemove = existing - needed;
-        for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
-            const QString panId = removalCandidates.at(i);
-            if (panId == PanSliceTitle::kPlaceholderPanId) continue;
-            qDebug() << "applyPanLayout: closing pan" << panId;
-            // Route through removePanadapter so a layout-shrink tears down the
-            // waterfall too ("display pan remove" + "display panafall remove"),
-            // not just the panadapter stream. (#3843)
-            m_radioModel.removePanadapter(panId);
-            // Radio will send "removed" status → panadapterRemoved signal
-            // → PanadapterStack::removePanadapter()
-            --toRemove;
+        // removePanadapter also tears down the waterfall (#3843); the removal
+        // itself arrives later through panadapterRemoved.
+        const PanLayoutShrinkPolicy::Outcome outcome = PanLayoutShrinkPolicy::closeFromEnd(
+            removalCandidates, existing, needed, PanSliceTitle::kPlaceholderPanId,
+            [this](const QString& panId) {
+                qDebug() << "applyPanLayout: closing pan" << panId;
+                return m_radioModel.removePanadapter(panId);
+            });
+        const QString reflowId = PanLayoutShrinkPolicy::appliedLayout(layoutId, needed, outcome, previousLayout);
+        if (PanLayoutShrinkPolicy::keepsArrangement(outcome)) {
+            return reflowId;  // the first close was refused; nothing to reflow
         }
 
         // Pan removal and slot rekeying arrive asynchronously. Reflow now and
         // after each settling turn so the final survivors, rather than a pan
         // that is still waiting to disappear, receive the canonical cells.
-        startCanvasPanLayoutSettle(layoutId, needed);
+        startCanvasPanLayoutSettle(reflowId, panCountForLayoutId(reflowId));
 
         // Rearrange remaining pans after a short delay for radio to process
-        QTimer::singleShot(500, this, [this, layoutId]() {
+        QTimer::singleShot(500, this, [this, reflowId]() {
             if (!m_workspaceController || !m_workspaceController->isEnabled()) {
-                m_panStack->rearrangeLayout(layoutId);
+                m_panStack->rearrangeLayout(reflowId);
             }
         });
-        return;
+        return reflowId;
     }
     if (needed == existing) {
         // Same count, just rearrange
@@ -11387,7 +11407,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             m_panStack->rearrangeLayout(layoutId);
         }
         startCanvasPanLayoutSettle(layoutId, needed);
-        return;
+        return layoutId;
     }
 
     // Create additional pans to reach the needed count.
@@ -11395,7 +11415,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     const int toCreate = needed - existing;
     if (m_panStack->count() + toCreate > m_radioModel.maxPanadapters()) {
         showPanadapterSliceCapacityMessage();
-        return;
+        return previousLayout;
     }
     auto panIds = std::make_shared<QStringList>();
 
@@ -11410,6 +11430,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
         startCanvasPanLayoutSettle(layoutId, needed);
     }
     createPansSequentially(layoutId, toCreate, panIds, 0);
+    return layoutId;
 }
 
 void MainWindow::startCanvasPanLayoutSettle(const QString& layoutId,

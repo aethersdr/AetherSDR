@@ -330,6 +330,7 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    QJsonObject automationSerialSnapshot() const;  // `serial` model (#6972)
     // Unified-title-bar introspection + drive-the-real-control actions for the
     // agent automation bridge (`titlebar` model / `titlebar` verb).
     QJsonObject automationAppletPanelSnapshot() const;
@@ -375,6 +376,7 @@ signals:
     // both branches of that callback; RadioSetupDialog uses it to reconcile
     // the Network-tab toggle. MainWindow persists the result independently.
     void automationBridgeStartResult(bool ok);
+    void agentActivityChanged(const QString& text, const QString& agent);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -541,6 +543,7 @@ private:
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
     // as pans appear, and those sites must seed a new menu with the current
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
+    bool panWnbSupported() const;
     void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
     // AppSettings key for a pan's persisted RF gain, scoped by radio family:
@@ -940,11 +943,21 @@ private:
     // The waterfall rate, only where the backend declares the client the owner.
     bool clientPersistsWaterfallRate() const;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // "Link display rates across pans" (#6799): while on, an operator move of
+    // FFT FPS or the waterfall rate on one pan goes to every open pan. One flag
+    // per radio in the ClientDisplay document; the cache is reloaded on each
+    // connection edge and pushed to every pan's Display panel.
+    bool m_linkPanDisplayRates{false};
+    void reloadLinkPanDisplayRates();
+    void setLinkPanDisplayRates(bool on);
+    QList<PanadapterApplet*> displayRateTargets(PanadapterApplet* source) const;
     // FFT FPS and the dBm scale, which a Flex stores for a pan and a radio
     // with no display engine does not. Same store and deferral as the
     // waterfall rate, only where the backend declares the client the owner.
     bool clientPersistsFftFps() const;
     void scheduleClientFftFpsSave(int panIndex, int fps);
+    // Per-pan spot marker visibility (#5711). Always client-owned.
+    void scheduleClientSpotMarkersOnPanSave(int panIndex, bool on);
     bool clientOwnsPanDbmRange() const;
     void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
                                   float minDbm, float maxDbm);
@@ -1192,7 +1205,9 @@ private:
     void publishRadioStateMqtt();
     void refreshRadioStateDriveAuthority();
 #endif
-    void applyPanLayout(const QString& layoutId);
+    // Returns the layout in effect afterwards: previousLayout when nothing
+    // changed, a smaller one when a refused close stopped a shrink.
+    QString applyPanLayout(const QString& layoutId, const QString& previousLayout);
     void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
     void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
                                int attemptsRemaining, quint64 generation);
@@ -1456,8 +1471,9 @@ private:
     QPointer<class AtuPreTuneDialog> m_kat500PreTuneDialog;
     Kpa500Connection  m_kpa500Conn;      // Elecraft KPA500 amplifier, serial or raw TCP
     RfkitConnection   m_rfkitConn;       // RF-KIT amplifier, REST/JSON over HTTP (default port 8080)
-    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch; read-only, changes nothing on it
-    Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP control/status on port 1500 (#4097)
+    MicrohamTrioModel m_trioModel;       // microHAM Trio antenna switch (web socket, port 80)
+    class MicrohamTrioRadioLink* m_trioLink = nullptr;   // its ports in the antenna menus
+    Kpa1500Connection m_kpa1500Conn;     // Elecraft KPA1500 amplifier, TCP or UDP on port 1500 (#4097)
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_CW_RX_BACKENDS
     void selectCwRxBackend(const QString& backend);
@@ -1603,6 +1619,22 @@ private:
     SerialPortController* m_serialPort{nullptr};
     FlexControlManager*   m_flexControl{nullptr};
     bool                  m_flexControlConnected{false};
+    // Observed serial PTT/CW port state, as last reported by the controller
+    // (#6972). Radio Setup and the `serial` bridge model read this, never the
+    // SerialPortOpen request setting.
+    bool                  m_serialPortOpen{false};
+    QString               m_serialPortDevice;
+    QString               m_serialPortError;      // empty unless the last open failed
+    int                   m_serialPortErrorCode{0};
+    int                   m_serialPortFailureKind{0};  // SerialOpenFailureKind
+    QString               m_serialPortGroup;
+    QPointer<QMessageBox> m_serialOpenErrorBox;   // one at a time, never stacked
+    quint64               m_serialSettingsRevision{0};
+    void queueSerialPortSettings();
+    void handleSerialConnectionState(bool open, const QString& device,
+                                     const QString& error, int nativeCode,
+                                     int failureKind, const QString& group);
+    void showSerialOpenError(const SerialOpenFailure& failure);
 #endif
     QTimer               m_flexCoalesceTimer;
     double               m_flexTargetMhz{-1.0};
@@ -2006,7 +2038,6 @@ private:
     void openFirmwareUpdate();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
-    QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_bandStackIndicator{nullptr};
@@ -2454,6 +2485,8 @@ private:
                              bool persist = true);
     void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
+    // Operator close: forgets the pan's Center Lock only if the model accepts it.
+    bool closePanForgettingCenterLock(const QString& panId);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
     // MultiFlex instances don't inherit or clobber each other's lock intent.

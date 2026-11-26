@@ -338,6 +338,40 @@ static void testModelTable()
     check(ic9700 && profileFor(*ic9700).supports(IcomFeature::VfoMode),
           "yet its measured 26 00 mode/DATA/filter shape is attested independently");
 
+    const auto* ic7110 = modelForId(0xBA);
+    check(ic7110 && supportsFrequency(*ic7110, 30'000) && supportsFrequency(*ic7110, 146'000'000)
+              && supportsFrequency(*ic7110, 430'000'000) && supportsFrequency(*ic7110, 440'000'000)
+              && !supportsFrequency(*ic7110, 146'000'001) && !supportsFrequency(*ic7110, 429'999'999)
+              && !supportsFrequency(*ic7110, 440'000'001),
+          "IC-7110 uses the Japanese model's documented receiver ranges, including their gap");
+    check(ic7110 && !bandRatedPowerWatts(*ic7110, 14'200'000)
+              && !bandRatedPowerWatts(*ic7110, 432'100'000),
+          "IC-7110 RX ranges confer no power rating for an unknown variant");
+
+    const auto* us = modelForId(0xBA, "US");
+    const auto* eu = modelForId(0xBA, "EU");
+    check(us && supportsFrequency(*us, 148'000'000) && supportsFrequency(*us, 420'000'000)
+              && supportsFrequency(*us, 450'000'000) && !supportsFrequency(*us, 450'000'001)
+              && !supportsFrequency(*us, 148'000'001) && !supportsFrequency(*us, 419'999'999)
+              && nearestSupportedFrequency(*us, 419'999'999) == 420'000'000
+              && us->tuningMaxHz == 450'000'000 && !us->hasTransmit,
+          "US IC-7110 covers both extended decks and rejects the gap");
+    check(eu && supportsFrequency(*eu, 70'500'000) && eu->bands.find(",4m,") != std::string_view::npos
+              && !supportsFrequency(*eu, 147'000'000) && !supportsFrequency(*eu, 445'000'000)
+              && eu->tuningMaxHz == 440'000'000 && !eu->hasTransmit,
+          "European IC-7110 advertises four metres with European VHF/UHF limits");
+    check(modelForId(0xBA, "unknown") == ic7110 && modelForId(0xA4, "US") == ic705,
+          "unknown regions and other model identities keep their original profiles");
+    const auto envelope = regionalTuningEnvelope(0xBA);
+    check(envelope && us && eu && envelope->minHz == 30'000 && envelope->maxHz == 450'000'000
+              && envelope->minHz <= std::min(us->tuningMinHz, eu->tuningMinHz)
+              && envelope->maxHz >= std::max(us->tuningMaxHz, eu->tuningMaxHz),
+          "IC-7110 readbacks are bounded by the hull of every regional profile");
+    const auto ic705Envelope = regionalTuningEnvelope(0xA4);
+    check(ic705 && ic705Envelope && ic705Envelope->minHz == ic705->tuningMinHz
+              && ic705Envelope->maxHz == ic705->tuningMaxHz && !regionalTuningEnvelope(0x01),
+          "a model without regions keeps its own envelope; an unknown ID has none");
+
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
     const IcomModel* ic905 = modelForId(0xAC);
@@ -440,8 +474,9 @@ static void testModelTable()
     // up a command shape nobody checked on that radio. Naming each address here
     // keeps that guard: the flag cannot go true without a deliberate edit to
     // this list, and the comment beside it has to say what the evidence was.
-    static const std::array<std::uint8_t, 6> kAttestedVfoMode{
+    static const std::array<std::uint8_t, 7> kAttestedVfoMode{
         0xA4,  // IC-705     — its own CI-V Reference Guide documents 26 00
+        0xBA,  // IC-7110    — A7894-4J: selected MAIN VFO, DATA and filter
         0xB6,  // IC-7300MK2 — likewise, from its own guide
         0x98,  // IC-7610 — official absolute MAIN/SUB 26 rr
         0xB2,  // IC-7760 — official absolute MAIN/SUB 26 rr
@@ -494,8 +529,8 @@ static void testCapabilityProfiles()
           "IC-705, IC-7300MK2 and IC-9700 are the intentional bring-up profiles");
     check(std::ranges::count_if(knownModels(), [](const IcomModel& model) {
               return profileFor(model).supportedBringup;
-          }) == 6,
-          "six intentional profiles include three shared dual-receiver models");
+          }) == 7,
+          "seven intentional profiles include the receive-only IC-7110 bring-up");
 
     check(p705.setMenu.voxDelayItem == 359 && p705.setMenu.civTransceiveItem == 131,
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");

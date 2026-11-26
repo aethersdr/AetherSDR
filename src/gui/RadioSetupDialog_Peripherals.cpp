@@ -27,6 +27,7 @@
 #include "core/AcomConnection.h"
 #include "core/AppSettings.h"
 #include "core/Kpa1500Connection.h"
+#include "core/Kpa1500Discovery.h"
 #include "core/Kpa500Connection.h"
 #include "core/LpMeterConnection.h"
 #include "core/PeripheralRemovalGuard.h"
@@ -51,6 +52,9 @@
 #include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
+#include <QAbstractButton>
+#include <QRadioButton>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QEvent>
@@ -1894,7 +1898,8 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         if (!view.snapshot) {
             return RadioSetupDialog::tr("No state read yet.");
         }
-        QString text = MicrohamTrioModel::describeState(*view.snapshot);
+        QString text = MicrohamTrioModel::describeBinding(view) + QLatin1Char('\n')
+            + MicrohamTrioModel::describeState(*view.snapshot);
         if (!view.stateCurrent) {
             text += QLatin1Char('\n') + RadioSetupDialog::tr("(as last read; not connected now)");
         }
@@ -1911,8 +1916,9 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     setTone(ui.deviceInfoLabel, Tone::Value);
     addFormRow(detail, tr("Trio State"), ui.deviceInfoLabel);
 
-    // Radio Ports and Antenna Ports: the Trio's names as it reports them,
-    // read-only.
+    // Radio Ports and Antenna Ports: the Trio's names as it reports them, and
+    // on the radio ports the marker "this AetherSDR" (stored per radio).
+    // Choosing it changes nothing on the Trio.
     auto* portsPanel = new QWidget(detail.page);
     portsPanel->setObjectName(QStringLiteral("peripheralTrioPorts"));
     portsPanel->setMaximumWidth(760);
@@ -1931,11 +1937,45 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     struct PortRow {
         QString group;
         QString key;
-        QLabel* caption{nullptr};
         QLabel* name{nullptr};
+        QAbstractButton* marker{nullptr};   // radio ports only
     };
     auto rows = std::make_shared<QVector<PortRow>>();
     auto rowKeys = std::make_shared<QStringList>();
+    auto* thisRadio = new QButtonGroup(radioGroup);
+    thisRadio->setExclusive(true);
+    auto* notOnTrio = new QRadioButton(tr("This AetherSDR is on none of them"), radioGroup);
+    notOnTrio->setObjectName(QStringLiteral("peripheralTrioNotOnTrio"));
+    thisRadio->addButton(notOnTrio);
+    // A marker the model could not store stays unchecked; the row's status
+    // line (announced, applyStatusLabel) says why, until a store succeeds.
+    auto bindingNoteFor = [](MicrohamTrioModel::BindResult result) {
+        switch (result) {
+        case MicrohamTrioModel::BindResult::Ok:
+            return QString();
+        case MicrohamTrioModel::BindResult::NoTrio:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: no Trio is set up");
+        case MicrohamTrioModel::BindResult::NoRadioIdentity:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the radio has no identity yet");
+        case MicrohamTrioModel::BindResult::NoState:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the Trio has not been read yet");
+        case MicrohamTrioModel::BindResult::NoSuchPort:
+            return RadioSetupDialog::tr("this radio's Trio port was not stored: the Trio no longer has that port");
+        case MicrohamTrioModel::BindResult::WriteFailed:
+            break;
+        }
+        return RadioSetupDialog::tr("this radio's Trio port could not be saved; nothing was changed");
+    };
+    auto applyBindingResult = [u, bindingNoteFor](MicrohamTrioModel::BindResult result) {
+        static const QString kPrefix = RadioSetupDialog::tr("this radio's Trio port");
+        if (result == MicrohamTrioModel::BindResult::Ok) {
+            if (u->state.note.startsWith(kPrefix)) {
+                u->state.note.clear();
+            }
+            return;
+        }
+        u->state.note = bindingNoteFor(result);
+    };
 
     ui.refreshExtra = [=]() {
         if (!trio) {
@@ -1954,33 +1994,71 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         if (keys != *rowKeys && view.snapshot) {
             // New set of buttons: rebuild the rows.
             for (const PortRow& row : *rows) {
-                delete row.caption;
-                delete row.name;
+                for (QWidget* w : {static_cast<QWidget*>(row.name), static_cast<QWidget*>(row.marker)}) {
+                    if (w) {
+                        if (auto* b = qobject_cast<QAbstractButton*>(w)) {
+                            thisRadio->removeButton(b);
+                        }
+                        delete w;
+                    }
+                }
+            }
+            for (QLabel* caption : radioGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
+                delete caption;
+            }
+            for (QLabel* caption : antennaGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
+                delete caption;
             }
             rows->clear();
             *rowKeys = keys;
-            const auto addRows = [&](const MicrohamTrio::Selector& selector, const QString& kind,
-                                     QGroupBox* box, QGridLayout* grid) {
-                int line = 0;
-                for (const MicrohamTrio::Button& button : selector.buttons) {
-                    auto* caption = new QLabel(button.name, box);
-                    caption->setObjectName(QStringLiteral("trioPortCaption"));
-                    caption->setTextFormat(Qt::PlainText);
-                    auto* name = new QLabel(button.label, box);
-                    name->setObjectName(QStringLiteral("peripheralTrioName_%1_%2").arg(kind, button.key));
-                    name->setTextFormat(Qt::PlainText);
-                    name->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                    name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
-                    grid->addWidget(caption, line, 0);
-                    grid->addWidget(name, line, 1);
-                    ++line;
-                    rows->append({kind, button.key, caption, name});
-                }
-            };
-            addRows(view.snapshot->radio, QStringLiteral("radio"), radioGroup, radioGrid);
-            addRows(view.snapshot->antenna, QStringLiteral("antenna"), antennaGroup, antennaGrid);
+            int radioRow = 0;
+            for (const MicrohamTrio::Button& button : view.snapshot->radio.buttons) {
+                auto* caption = new QLabel(button.name, radioGroup);
+                caption->setObjectName(QStringLiteral("trioPortCaption"));
+                caption->setTextFormat(Qt::PlainText);
+                auto* name = new QLabel(button.label, radioGroup);
+                name->setObjectName(QStringLiteral("peripheralTrioName_radio_%1").arg(button.key));
+                name->setTextFormat(Qt::PlainText);
+                name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
+                auto* marker = new QRadioButton(RadioSetupDialog::tr("this AetherSDR"), radioGroup);
+                marker->setObjectName(QStringLiteral("peripheralTrioThis_%1").arg(button.key));
+                marker->setAccessibleName(RadioSetupDialog::tr("This AetherSDR is on Trio %1")
+                                              .arg(button.name));
+                thisRadio->addButton(marker);
+                QObject::connect(marker, &QRadioButton::clicked, marker,
+                                 [trio, key = button.key, refresh, applyBindingResult]() {
+                    if (trio) {
+                        applyBindingResult(trio->bindRadioSlot(key));
+                    }
+                    refresh();
+                });
+                radioGrid->addWidget(caption, radioRow, 0);
+                radioGrid->addWidget(name, radioRow, 1);
+                radioGrid->addWidget(marker, radioRow, 2);
+                ++radioRow;
+                rows->append({QStringLiteral("radio"), button.key, name, marker});
+            }
+            radioGrid->addWidget(notOnTrio, radioRow, 1, 1, 2);
+            int antennaRow = 0;
+            for (const MicrohamTrio::Button& button : view.snapshot->antenna.buttons) {
+                auto* caption = new QLabel(button.name, antennaGroup);
+                caption->setObjectName(QStringLiteral("trioPortCaption"));
+                caption->setTextFormat(Qt::PlainText);
+                auto* name = new QLabel(button.label, antennaGroup);
+                name->setObjectName(QStringLiteral("peripheralTrioName_antenna_%1").arg(button.key));
+                name->setTextFormat(Qt::PlainText);
+                name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
+                antennaGrid->addWidget(caption, antennaRow, 0);
+                antennaGrid->addWidget(name, antennaRow, 1);
+                ++antennaRow;
+                rows->append({QStringLiteral("antenna"), button.key, name, nullptr});
+            }
         }
-        // Names follow the Trio.
+        // Names follow the Trio. The markers share an exclusive group, in which
+        // a checked button cannot be unchecked: off while they are set.
+        thisRadio->setExclusive(false);
         for (const PortRow& row : *rows) {
             const MicrohamTrio::Selector* group = !view.snapshot ? nullptr
                 : row.group == QLatin1String("radio") ? &view.snapshot->radio : &view.snapshot->antenna;
@@ -1988,10 +2066,28 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             if (button && row.name->text() != button->label) {
                 row.name->setText(button->label);
             }
+            if (row.marker) {
+                const QSignalBlocker blocked(row.marker);
+                row.marker->setChecked(view.binding == MicrohamTrioBinding::Stored::Bound
+                                       && view.slotKey == row.key);
+                row.marker->setEnabled(view.radioKnown && view.configured);
+            }
         }
+        {
+            const QSignalBlocker blocked(notOnTrio);
+            notOnTrio->setChecked(view.binding == MicrohamTrioBinding::Stored::NotOnTrio);
+            notOnTrio->setEnabled(view.radioKnown && view.configured && view.snapshot.has_value());
+        }
+        thisRadio->setExclusive(true);
         radioGroup->setEnabled(view.snapshot.has_value());
         antennaGroup->setEnabled(view.snapshot.has_value());
     };
+    QObject::connect(notOnTrio, &QRadioButton::clicked, notOnTrio, [trio, refresh, applyBindingResult]() {
+        if (trio) {
+            applyBindingResult(trio->setNotOnTrio());
+        }
+        refresh();
+    });
     ui.refreshExtra = [previous = ui.refreshExtra, testButton, trio]() {
         previous();
         testButton->setEnabled(trio && !trio->isTesting());
@@ -2068,12 +2164,36 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
     ui.portSpin = makePortSpin(ui);
     ui.portSpin->setValue(PeripheralSettings::deviceInt("Kpa1500", "ManualPort", ui.defaultPort));
     ui.portSpin->setAccessibleName(tr("KPA1500 control port"));
-    ui.portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 1500"));
+    ui.portSpin->setAccessibleDescription(
+        tr("Control port, 1 to 65535, default 1500. The amplifier uses the same port for TCP "
+           "and UDP"));
+
+    // The amp serves the same command set over TCP and UDP on one port.
+    ui.modeCombo = new QComboBox;
+    ui.modeCombo->setObjectName(QStringLiteral("peripheralTransport_%1").arg(ui.id));
+    ui.modeCombo->setAccessibleName(tr("KPA1500 transport"));
+    ui.modeCombo->setAccessibleDescription(
+        tr("TCP or UDP. UDP polls the meters faster and confirms every control by reading it "
+           "back. Takes effect the next time you connect."));
+    for (auto t : {Kpa1500::Transport::Tcp, Kpa1500::Transport::Udp}) {
+        ui.modeCombo->addItem(Kpa1500::transportLabel(t), Kpa1500::transportSettingValue(t));
+    }
+    {
+        const QString saved = Kpa1500::transportSettingValue(Kpa1500::transportFromSettingValue(
+            PeripheralSettings::deviceString("Kpa1500", "Transport")));
+        const int idx = ui.modeCombo->findData(saved);
+        ui.modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    connect(ui.modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [combo = ui.modeCombo](int idx) {
+        PeripheralSettings::setDeviceString("Kpa1500", "Transport",
+                                            combo->itemData(idx).toString());
+    });
 
     ui.connectButton = makeConnectButton(ui);
     ui.connectButton->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
-    connect(ui.connectButton, &QPushButton::clicked, this, [u, refresh]() {
-        if (u->isConnected()) {
+    connect(ui.connectButton, &QPushButton::clicked, this, [this, u, refresh]() {
+        if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
         }
@@ -2085,8 +2205,18 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
             return;
         }
         const int port = u->portSpin->value();
+        if (ip != PeripheralSettings::deviceString("Kpa1500", "ManualIp")) {
+            // A saved MAC belongs to the amp at the old address; Wake-on-LAN
+            // must not be aimed at it. The new amp's ^MA replaces it.
+            PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+            if (m_kpa1500) {
+                m_kpa1500->setWakeMacAddress(QString());
+            }
+        }
         PeripheralSettings::setDeviceString("Kpa1500", "ManualIp", ip);
         PeripheralSettings::setDeviceInt("Kpa1500", "ManualPort", port);
+        PeripheralSettings::setDeviceString("Kpa1500", "Transport",
+                                            u->modeCombo->currentData().toString());
         u->state.connecting = true;
         refresh();
         u->connectNetwork(ip, static_cast<quint16>(port));
@@ -2095,8 +2225,91 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
 
     addFormRow(detail, tr("IP Address"), ui.addressEdit);
     addFormRow(detail, tr("Port"), ui.portSpin);
+    addFormRow(detail, tr("Transport"), ui.modeCombo);
 
-    m_peripheralRowSavers.append([u]() {
+    // Find: the amp answers ^SN over UDP from any client, so a sweep of this
+    // computer's networks locates it without knowing its address.
+    auto* findHint = new QLabel;
+    findHint->setObjectName(QStringLiteral("peripheralFindHint_%1").arg(ui.id));
+    findHint->setWordWrap(true);
+    applyLabelStyle(findHint);
+    findHint->hide();
+    addFormRow(detail, QString(), findHint);
+
+    auto* findButton = new QPushButton(tr("Find"));
+    findButton->setObjectName(QStringLiteral("peripheralFind_%1").arg(ui.id));
+    findButton->setAccessibleName(tr("Find Elecraft KPA1500 on the network"));
+    findButton->setAccessibleDescription(
+        tr("Asks every address on this computer's local networks for a KPA1500 serial number "
+           "on the port above, over UDP, and fills in the address of the amplifier that "
+           "answers. Sends queries only."));
+    auto* discovery = new Kpa1500Discovery(findButton);
+    const QString findDescription = findButton->accessibleDescription();
+    auto updateFindAvailability = [findButton, u, findDescription]() {
+        const bool connected = u->isConnected();
+        findButton->setEnabled(!connected);
+        const QString reason = connected ? tr("Disconnect to search for a different amplifier")
+                                         : QString();
+        findButton->setToolTip(reason);
+        findButton->setAccessibleDescription(connected ? reason : findDescription);
+    };
+    updateFindAvailability();
+    connect(m_kpa1500, &Kpa1500Connection::connected, findButton, updateFindAvailability);
+    connect(m_kpa1500, &Kpa1500Connection::disconnected, findButton, updateFindAvailability);
+    connect(findButton, &QPushButton::clicked, this, [findButton, findHint, discovery, u]() {
+        if (discovery->isRunning()) {
+            return;
+        }
+        findButton->setEnabled(false);
+        findButton->setText(tr("Searching…"));
+        findHint->setText(tr("Searching this computer's networks on UDP port %1…")
+                              .arg(u->portSpin->value()));
+        findHint->show();
+        discovery->start(static_cast<quint16>(u->portSpin->value()));
+    });
+    connect(discovery, &Kpa1500Discovery::failed, findButton,
+            [findButton, findHint, updateFindAvailability](const QString& error) {
+        findButton->setText(tr("Find"));
+        updateFindAvailability();
+        findHint->setText(tr("Find could not open a UDP socket: %1").arg(error));
+    });
+    connect(discovery, &Kpa1500Discovery::finished, findButton,
+            [findButton, findHint, discovery, u, updateFindAvailability](int count) {
+        findButton->setText(tr("Find"));
+        updateFindAvailability();
+        const QList<Kpa1500Discovery::Found> amps = discovery->results();
+        auto describe = [](const Kpa1500Discovery::Found& f) {
+            return f.firmware.isEmpty()
+                ? tr("KPA1500 S/N %1 at %2").arg(f.serialNumber, f.address.toString())
+                : tr("KPA1500 S/N %1 (firmware %2) at %3")
+                      .arg(f.serialNumber, f.firmware, f.address.toString());
+        };
+        if (count == 0 || amps.isEmpty()) {
+            findHint->setText(
+                tr("No KPA1500 answered on UDP port %1. Check that the amplifier is on the same "
+                   "network and its port matches, or enter its address by hand.")
+                    .arg(u->portSpin->value()));
+            return;
+        }
+        if (amps.size() == 1) {
+            u->addressEdit->setText(amps.first().address.toString());
+            findHint->setText(tr("Found %1. Press Connect.").arg(describe(amps.first())));
+            return;
+        }
+        findHint->setText(tr("Found %1 amplifiers. Pick one:").arg(amps.size()));
+        QMenu menu(findButton);
+        for (const Kpa1500Discovery::Found& f : amps) {
+            QAction* pick = menu.addAction(describe(f));
+            const QString address = f.address.toString();
+            connect(pick, &QAction::triggered, findButton, [u, findHint, address]() {
+                u->addressEdit->setText(address);
+                findHint->setText(tr("Selected %1. Press Connect.").arg(address));
+            });
+        }
+        menu.exec(findButton->mapToGlobal(QPoint(0, findButton->height())));
+    });
+
+    m_peripheralRowSavers.append([this, u]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;
         }
@@ -2106,13 +2319,17 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
         }
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
         PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
+        PeripheralSettings::clearDeviceField("Kpa1500", "MacAddress");
+        if (m_kpa1500) {
+            m_kpa1500->setWakeMacAddress(QString());
+        }
         // Connected or still retrying: a reconnect loop aimed at the cleared
         // address would otherwise keep dialing it until restart.
         if (u->description().startsWith(savedIp + ":")) {
             u->disconnectNow();
         }
     });
-    finishDetailPage(detail, ui, {});
+    finishDetailPage(detail, ui, {findButton});
 }
 
 namespace {
@@ -2502,10 +2719,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                             PeripheralDeviceUi::Kind::Kpa1500, Kpa1500::kDefaultPort);
         ui->settingsGroup = QStringLiteral("Kpa1500");
         ui->isConnected = [this]() { return m_kpa1500->isConnected(); };
+        // Asleep with its link down, the amp is still being reached for:
+        // the row offers Disconnect, which ends that state.
+        ui->isConnecting = [this]() { return m_kpa1500->isAsleepOffline(); };
         ui->disconnectNow = [this]() { m_kpa1500->disconnect(); };
-        ui->connectNetwork = [this](const QString& h, quint16 p) { m_kpa1500->connectNetwork(h, p); };
+        ui->connectNetwork = [this](const QString& h, quint16 p) {
+            m_kpa1500->setTransport(Kpa1500::transportFromSettingValue(
+                PeripheralSettings::deviceString("Kpa1500", "Transport")));
+            m_kpa1500->connectNetwork(h, p);
+        };
         ui->description = [this]() { return m_kpa1500->description(); };
-        ui->afterRemoval = [this]() { m_kpa1500->disconnect(); };
+        ui->afterRemoval = [this]() {
+            m_kpa1500->disconnect();
+            m_kpa1500->setWakeMacAddress(QString());
+        };
         buildKpa1500Device(*ui, detailStack, refresh);
     }
     if (m_rfkit) {
@@ -3544,6 +3771,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_kpa1500) {
         wireLinkDevice(QStringLiteral("kpa1500"), m_kpa1500);
+        connect(m_kpa1500, &Kpa1500Connection::asleepOfflineChanged, this,
+                [onLink]() { onLink(QStringLiteral("kpa1500")); });
     }
     if (m_rfkit) {
         wireLinkDevice(QStringLiteral("rfkit"), m_rfkit);

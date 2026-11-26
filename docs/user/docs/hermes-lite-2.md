@@ -47,7 +47,7 @@ with the same temporary-directory fallback. The cache file is
 
 ### Board variant and hardware: HL2 Hardware
 
-**Settings → Radio Setup... → HL2 Hardware** describes the physical radio. It appears while an HL2 is connected, and the settings are stored against that radio.
+**Settings → Radio Setup... → HL2 Hardware** describes the physical radio. It appears while an HL2 is connected, and the settings are stored against that radio, except **CW Timing**, which is one setting for every HL2 on this computer.
 
 | Group | Controls |
 |-------|----------|
@@ -55,6 +55,7 @@ with the same temporary-directory fallback. The cache file is
 | **Dither Bit** | **Dither bit** and **Random bit**. On some variants the first box is relabeled to what that board uses the line for (internal loudspeaker or band-voltage output). |
 | **Companion Filter Board** | **Board:** **None — nothing on J16**, **N2ADR — receive and transmit**, or **N2ADR — transmit only**. **Receive through the N2ADR 3 MHz high-pass** adds the AM-broadcast high-pass on receive (80 m to 10 m). Choose **None** only when nothing is fitted, because then nothing filters the transmitter's harmonics. A SQUARE SDR 2 with no board chosen yet starts with **N2ADR — transmit only**, its own arrangement, selected and **Detected: SQUARE SDR 2 — suggested, not saved** beside it; as with the codec, choosing a board, the selected one included, stores it, and any choice you have made is kept. |
 | **Reference Clock and Tuner** | **External 10 MHz reference at CL1** locks the radio to a reference such as a GPSDO instead of its crystal. CL1 expects a 3.3 V logic-level clock: pad a typical 5 V GPSDO output with at least 6 dB of 50 Ω attenuation. Lock is not read back. **Antenna tuner driven by the HL2 gateware** raises the tune request during TUNE for an AH-4-protocol ATU; leave it off for a tuner on the N2ADR IO board. |
+| **CW Timing** | **Edge lead:** how long after the sidetone each CW element from AetherSDR's keyer goes on the air, 0 to 100 ms, default 40 ms. A shorter lead puts the RF closer to the sidetone, for break-in (QSK) on a computer that keeps up; it leaves less margin for the computer stalling. A stall longer than the lead delays the rest of that transmission and lengthens the space before it; dits and dahs keep their length. With **Break In** off, releasing MOX or PTT ends the transmission at once: an element whose sidetone ended less than the lead before the release can be cut short or not sent. A change made while transmitting applies from the next transmission. The lead is a setting of this computer: another HL2 connected at the same time picks the change up at its next connect. |
 | **IO Board** | **Read IO Board Status** reads the N2ADR IO board once: firmware major version, EXTTR (high on receive), inputs In1 to In5, the antenna tuner register and the fault code. Nothing is read until you press it, and reading changes nothing on the board. With no board fitted it says **No IO board answered**. |
 
 The HL2 IO board's amplifier control follows the band.
@@ -110,6 +111,8 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
+> **Receive audio is mono (L = R) in every mode.** Anything that mixes left and right to one channel (TCI mono, the decoders, Linux DAX, RADE) now gets more level than before: about 3 dB in SSB, CW and data, and about 6 dB in DSB and in AM or SAM with the noise reduction or auto-notch on; if you set an application's input level (for example WSJT-X) against the old level, check it once.
+
 ### Receive filters
 
 Choose filter presets in [RX Controls](./rx-controls.md) or the
@@ -139,9 +142,12 @@ The panadapter SQL line and **Auto** squelch use the HL2's own scale.
 ### AGC and APF
 
 - AGC mode and threshold are remembered across restarts.
+- **AGC on:** the **AGC-T** slider sets the most gain the AGC may apply: 0.6 dB per step up to 65 (39 dB, the default), then faster, to 90 dB at 100. The higher it is, the louder weak signals come up, and with them the band noise between signals.
 - **AGC off:** the **AGC-T** slider sets a fixed gain, 4–64 dB (10 dB by default). The AGC-off level is remembered per receiver.
 - Selecting **DIGU** or **DIGL** turns AGC off on that receiver. Raise the AGC-off level if data audio is too quiet. A band-stack bookmark recalled into DIGU or DIGL also keeps AGC off, whatever AGC mode it stored.
 - **APF**, the CW audio peaking filter, is centered on your CW pitch. Its toggle and level are in the P/CW pane.
+
+> **Upgrading from an older version:** **AGC-T** above 65 gives more gain than before (at 100, 90 dB instead of 60 dB). A threshold or band-stack bookmark saved above 65 comes back louder; lower **AGC-T** if the noise between signals is too loud.
 
 ### RIT and XIT
 
@@ -158,9 +164,10 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
 - **Transmit timing:** at the start of an over, voice and data audio wait until one block (about 11 ms) plus about 43 ms of IQ is queued. That margin absorbs up to about 43 ms of accumulated delivery lateness; larger delays can still cause gaps. USB and LSB use a minimum-phase transmit filter; data modes keep linear phase. CW and TUNE bypass the queue hold.
+- **While transmitting, the transmit setup cannot change.** A change of the TX slice's mode, the TX low/high cut, which slice transmits, or closing the panadapter that holds the TX slice is refused until you unkey, from the desktop, CAT and TCI alike. The panadapter shows why, for example "Mode can't change while transmitting.", and the controls go back to what is being transmitted. A TX cut set in USB or LSB is kept when you switch to a data mode between overs and applies again on return to USB or LSB. Unkeyed, a change applies at once.
 - **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or AM, or while transmitting from another receiver.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
-- **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
+- **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target, −0.45 dBFS, while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
 - **CW text from a logger:** rigctld `send_morse` is keyed by AetherSDR when the transmit slice is in CW, at the CW speed and break-in setting in AetherSDR, without local sidetone. With break-in off, the logger must key PTT first, or the text is refused. TCI and FlexCAT CW text are not keyed. See [CAT Control](./cat-control.md).
@@ -246,7 +253,7 @@ AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedbac
 - One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
 - With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so, and the first voice transmission in that state also shows the notice on the panadapter; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
 - A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
-- Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
+- Paddle CW from AetherSDR's keyer goes on the air at least the **Edge lead:** after the sidetone (**HL2 Hardware → CW Timing**, 40 ms unless you change it), so that a busy computer does not change dit and dah lengths. If the app stalls for longer than that, the rest of that transmission goes out later by the stall, with the same element lengths, and the gap before it is that much longer. A stall of more than a quarter second beyond the edge lead stops the carrier until the transmission ends, and the panadapter shows a "TX failed" notice reading "CW keying fell too far behind" once for that transmission ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
 - One user reports that a transmission keyed over TCI on v26.11.2 drops out every few seconds. It is not reproduced: in 31 TCI overs into a dummy load on another HL2, on v26.11.2 and on main of 2026-11-12 (`50ed5fff2`), transmit and audio held for the whole over ([#7188](https://github.com/aethersdr/AetherSDR/issues/7188)).
 

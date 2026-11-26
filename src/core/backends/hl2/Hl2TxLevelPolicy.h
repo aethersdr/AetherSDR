@@ -16,8 +16,8 @@ namespace AetherSDR::hl2 {
 // The Phone applet's MIC slider (0..100) as dB of gain. 50 is unity (a radio
 // with nothing stored leaves the modulator at 1.0), so it must not move.
 // Below 50: 0.4 dB/step to -20 dB. Above 50: 0.8 dB/step to +40 dB, because
-// the ALC has no makeup gain and speech (~-32 dBFS) is ~30 dB short of its
-// 0.85 target. The join at 50 is continuous in value, not slope;
+// the ALC has no makeup gain and speech (~-32 dBFS) is ~31 dB short of its
+// 0.95 target. The join at 50 is continuous in value, not slope;
 // hl2_tx_level_policy_test pins it. Level 0 is a mute (micSliderToLinear).
 [[nodiscard]] constexpr double micSliderToGainDb(int level) noexcept
 {

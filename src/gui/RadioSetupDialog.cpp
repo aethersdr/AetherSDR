@@ -1369,7 +1369,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
     // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
     QTreeWidgetItem* droopItem = addPage(radioCategory, QStringLiteral("Droop Correction"),
-        QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
+        QStringLiteral("droop calibration ddc panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
     setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
@@ -4758,6 +4758,99 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     controls->append(atuChk);
     vbox->addWidget(miscGroup);
 
+    // ── CW timing (#7245) ────────────────────────────────────────────────────
+    //
+    // A setting of this computer, not of the radio (the backend keeps it in
+    // its own config object), so it is NOT in `controls`: it needs no radio
+    // identity, only a backend that answers cwlead.get / cwlead.set. Disabled
+    // until that reply has filled it, so a default it never read is not shown
+    // as the stored value.
+    auto* cwGroup = new QGroupBox("CW Timing");
+    auto* cwvb = new QVBoxLayout(cwGroup);
+    cwvb->setSpacing(6);
+    auto* cwIntro = new QLabel(
+        "AetherSDR's keyer puts each CW edge on the air a fixed lead after the sidetone, so a "
+        "busy computer does not change dit and dah lengths. A shorter lead brings the RF "
+        "closer to the sidetone for break-in (QSK); a stall longer than the lead delays the "
+        "rest of that transmission and lengthens one space.");
+    setTone(cwIntro, Tone::Hint);
+    cwIntro->setWordWrap(true);
+    cwvb->addWidget(cwIntro);
+    auto* cwRow = new QHBoxLayout;
+    auto* cwLbl = new QLabel("Edge lead:");
+    applyLabelStyle(cwLbl);
+    auto* cwLeadSpin = new QSpinBox;
+    cwLeadSpin->setObjectName(QStringLiteral("hl2CwEdgeLead"));
+    cwLeadSpin->setRange(0, 100);   // replaced by the backend's range on fill
+    cwLeadSpin->setSuffix(QStringLiteral(" ms"));
+    cwLeadSpin->setFixedWidth(100);
+    // One write per committed value, not one per keystroke.
+    cwLeadSpin->setKeyboardTracking(false);
+    cwLeadSpin->setEnabled(false);
+    cwLbl->setBuddy(cwLeadSpin);
+    cwLeadSpin->setAccessibleName(QStringLiteral("CW edge lead"));
+    cwLeadSpin->setAccessibleDescription(QStringLiteral(
+        "Delay from the keyer's sidetone to the CW edge on the air, in milliseconds. "
+        "Lower is closer to the sidetone; higher absorbs longer computer stalls. "
+        "Default 40. A change made while transmitting applies from the next transmission."));
+    cwLeadSpin->setToolTip(QStringLiteral(
+        "How long after the sidetone each CW edge from AetherSDR's keyer goes on the air.\n\n"
+        "Lower: the RF follows the sidetone more closely (break-in, QSK).\n"
+        "Higher: a longer computer stall is absorbed without changing anything on the air.\n\n"
+        "A stall longer than the lead delays the rest of that transmission, with the same\n"
+        "element lengths. Default 40 ms; a change applies from the next transmission."));
+    cwRow->addWidget(cwLbl);
+    cwRow->addWidget(cwLeadSpin);
+    cwRow->addStretch(1);
+    cwvb->addLayout(cwRow);
+    vbox->addWidget(cwGroup);
+    // Same shape as the hw.get read below: connected before the invoke,
+    // because the backend answers synchronously.
+    const QPointer<QSpinBox> cwLeadGuard(cwLeadSpin);
+    auto cwLeadFill = [cwLeadGuard](const QVariantMap& m) {
+        if (!cwLeadGuard)
+            return;
+        const QSignalBlocker block(cwLeadGuard);
+        const int lo = m.value(QStringLiteral("minMs"), 0).toInt();
+        const int hi = m.value(QStringLiteral("maxMs"), 100).toInt();
+        cwLeadGuard->setRange(lo, std::max(lo, hi));
+        cwLeadGuard->setValue(std::clamp(m.value(QStringLiteral("edgeLeadMs"), 40).toInt(), lo,
+                                         std::max(lo, hi)));
+        cwLeadGuard->setEnabled(true);
+    };
+    auto cwLeadInvoke = [this, cwLeadFill](const QString& verb, const QVariant& arg) {
+        IRadioBackend* backend = m_model->backend();
+        if (!backend || !m_model->backendDeclaresExtension(QStringLiteral("hl2")))
+            return false;
+        // Its own decade: 0x01 and 0x03..0x06 are taken (BandscopeDialog, hw.get,
+        // calibration, calibration set, SupportBundle).
+        // 0x08 is this one's; 0x07 and 0x09 are reserved for TCI's HL2
+        // extension and the IO board read.
+        constexpr quint64 kCwLeadRequestIdBase = 0x0800000000000000ull;
+        static quint64 nextCwLeadId = kCwLeadRequestIdBase;
+        const quint64 requestId = nextCwLeadId++;
+        auto* guard = new QObject(this);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [guard, requestId, cwLeadFill](quint64 id, const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            cwLeadFill(result.toMap());
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId](quint64 id, const QString&) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+        });
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, requestId, arg);
+        return true;
+    };
+    connect(cwLeadSpin, &QSpinBox::valueChanged, this, [cwLeadInvoke](int ms) {
+        cwLeadInvoke(QStringLiteral("cwlead.set"),
+                     QVariantMap{{QStringLiteral("edgeLeadMs"), ms}});
+    });
+
     // ── IO board status (read-only) ──────────────────────────────────────────
     // `ioboard.status` on demand only: a read flashes the board's LED and uses
     // the radio's one control-reply slot, so opening the page sends nothing.
@@ -4864,7 +4957,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, codecSuggestedLbl, ditherChk,
                            randomChk, filterCombo, filterSuggestedLbl, hpfChk, cl1Chk,
                            atuChk, spkSlider, noRadioLbl, controls, refreshDither,
-                           refreshHpf, refreshSpeaker] {
+                           refreshHpf, refreshSpeaker, cwLeadGuard, cwLeadInvoke] {
         if (!codecGuard)
             return;
         // Through the backend's `hw.get`, not Hl2HardwareOptions: including that
@@ -4875,6 +4968,11 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
         const bool canAsk = backend
             && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
+        if (cwLeadGuard) {
+            cwLeadGuard->setEnabled(false);   // until cwlead.get answers
+            if (canAsk)
+                cwLeadInvoke(QStringLiteral("cwlead.get"), QVariant());
+        }
         if (!canAsk) {
             // Nothing to read from and nothing that could persist a write.
             // Dim everything and say why, rather than leaving the last radio's
@@ -5112,7 +5210,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
 
 
 
-    auto* group = new QGroupBox("DDC0 Droop Correction");
+    auto* group = new QGroupBox("DDC Droop Correction");
     auto* gvb = new QVBoxLayout(group);
     gvb->setSpacing(8);
 
@@ -5148,7 +5246,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     // reads "Stop" -- worse than saying nothing. The description supplements
     // the live text instead of replacing it.
     startStopBtn->setAccessibleDescription(QStringLiteral(
-        "Steps the radio through every DDC0 sample rate and measures the "
+        "Steps the radio through every DDC sample rate and measures the "
         "panadapter's edge droop at each one. Takes several minutes."));
 
     auto* progressBar = new QProgressBar;
@@ -5179,7 +5277,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     setTone(summaryLbl, Tone::Hint);
     summaryLbl->setWordWrap(true);
     summaryLbl->setAccessibleDescription(QStringLiteral(
-        "Measured correction per DDC0 rate"));
+        "Measured correction per DDC rate"));
     gvb->addWidget(summaryLbl);
 
     auto* applyBtn = new QPushButton("Apply");
@@ -5377,12 +5475,14 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     AetherSDR::applyComboStyle(feRateCombo);
     for (const int ksps : AnanSettings::validDdc0RatesKsps())
         feRateCombo->addItem(QStringLiteral("%1 ksps").arg(ksps), ksps);
-    feRateCombo->setAccessibleName(QStringLiteral("ANAN DDC0 sample rate"));
+    feRateCombo->setAccessibleName(QStringLiteral("ANAN starting sample rate"));
     feRateCombo->setAccessibleDescription(QStringLiteral(
-        "DDC0 sample rate in ksps, and the panadapter span a session starts at. Higher "
-        "rates use more of the radio's Ethernet link. Takes effect on the next connect."));
+        "Sample rate in ksps every receiver starts a session at, and the width of its "
+        "panadapter span. Higher rates use more of the radio's Ethernet link. Takes effect "
+        "on the next connect."));
     feRateCombo->setToolTip(QStringLiteral(
-        "DDC0 sample rate — also the width of the panadapter span a session starts at.\n"
+        "Sample rate every receiver starts a session at — also the width of its\n"
+        "panadapter span.\n"
         "Higher rates use more of the radio's Ethernet link.\n\n"
         "Takes effect on the next connect. A live zoom can still change the span\n"
         "afterwards; this is where a session begins."));
@@ -5400,10 +5500,11 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     feAdcCombo->addItem(QStringLiteral("ADC1 — the RX2 jack"), 1);
     feAdcCombo->setAccessibleName(QStringLiteral("ANAN ADC select"));
     feAdcCombo->setAccessibleDescription(QStringLiteral(
-        "Which receive chain feeds the receiver: ADC0, behind the switched ANT1/2/3 relay "
-        "bank, or ADC1, wired directly to its own RX2 jack. Takes effect on the next connect."));
+        "Which receive chain feeds RX1: ADC0, behind the switched ANT1/2/3 relay bank, or "
+        "ADC1, wired directly to its own RX2 jack. RX2 always listens to the RX2 jack. "
+        "Takes effect on the next connect."));
     feAdcCombo->setToolTip(QStringLiteral(
-        "Which receive chain feeds the receiver.\n\n"
+        "Which receive chain feeds RX1. RX2 always listens to the RX2 jack.\n\n"
         "ADC0 sits behind the switched ANT1/2/3 relay bank. ADC1's chain is wired\n"
         "straight to its own RX2 jack with no relay in front of it — two physically\n"
         "different paths, not a label swap.\n\n"
@@ -8995,53 +9096,55 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
 
-
         auto* openBtn = new QPushButton("Open");
+        openBtn->setObjectName(QStringLiteral("serialOpenButton"));
         // Min-width rather than fixed-width: macOS native button metrics need
         // more horizontal room than the 80 px Windows/Fusion baseline.
         openBtn->setMinimumWidth(80);
         setButtonRole(openBtn, ButtonRole::Select);
         auto* closeBtn = new QPushButton("Close");
+        closeBtn->setObjectName(QStringLiteral("serialCloseButton"));
         closeBtn->setMinimumWidth(80);
         setButtonRole(closeBtn, ButtonRole::Select);
 
         auto* statusLabel = new QLabel;
+        statusLabel->setObjectName(QStringLiteral("serialPortStatusLabel"));
+        statusLabel->setWordWrap(true);
+        statusLabel->setTextFormat(Qt::PlainText);  // carries OS error text
+        statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        statusLabel->setAccessibleName(QStringLiteral("Serial port connection status"));
 
         row->addWidget(openBtn);
         row->addWidget(closeBtn);
-        row->addWidget(statusLabel);
-        row->addStretch();
+        row->addWidget(statusLabel, 1);
 
-        auto updatePortStatus = [openBtn, closeBtn, statusLabel]() {
-            bool open = AppSettings::instance().value("SerialPortOpen", "False").toString() == "True";
-            openBtn->setEnabled(!open);
-            closeBtn->setEnabled(open);
-            if (open) {
-                statusLabel->setText("Open");
-                setTone(statusLabel, Tone::Ok);
-            } else {
-                statusLabel->setText("Closed");
-                setTone(statusLabel, Tone::Hint);
-            }
-        };
+        m_serialOpenButton = openBtn;
+        m_serialCloseButton = closeBtn;
+        m_serialStatusLabel = statusLabel;
 
-        connect(openBtn, &QPushButton::clicked, this, [this, updatePortStatus]() {
+        // The status shows what the controller reported, never the request:
+        // MainWindow pushes setSerialPortConnectionStatus() after every open
+        // and close, including failures (#6972).
+        connect(openBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
+            if (s.value("SerialPortName").toString().isEmpty()) {
+                setSerialPortConnectionStatus(false, {}, tr("Select a serial port."));
+                return;
+            }
             s.setValue("SerialPortOpen", "True");
             s.save();
-            updatePortStatus();
             emit serialSettingsChanged();
         });
 
-        connect(closeBtn, &QPushButton::clicked, this, [this, updatePortStatus]() {
+        connect(closeBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
             s.setValue("SerialPortOpen", "False");
             s.save();
-            updatePortStatus();
             emit serialSettingsChanged();
         });
 
-        updatePortStatus();
+        setSerialPortConnectionStatus(m_serialPortOpen, m_serialPortDevice,
+                                      m_serialPortError);
         // In a group like everything else on the page, not loose between
         // Pin Assignment and the FlexControl knob.
         auto* connectionGroup = new QGroupBox("Connection");
@@ -9858,6 +9961,32 @@ void RadioSetupDialog::refreshFlexControlButtonActions()
             settings.value("FlexControlInvertDir", "False").toString() == "True";
         const QSignalBlocker blocker(m_flexControlInvertCheck);
         m_flexControlInvertCheck->setChecked(inverted);
+    }
+}
+
+void RadioSetupDialog::setSerialPortConnectionStatus(bool open, const QString& device,
+                                                     const QString& error)
+{
+    m_serialPortOpen = open;
+    m_serialPortDevice = device;
+    m_serialPortError = error;
+    if (m_serialOpenButton)
+        m_serialOpenButton->setEnabled(!open);
+    if (m_serialCloseButton)
+        m_serialCloseButton->setEnabled(open);
+    if (!m_serialStatusLabel)
+        return;
+    if (open) {
+        m_serialStatusLabel->setText(device.isEmpty()
+            ? QStringLiteral("Open")
+            : QStringLiteral("Open (%1)").arg(device));
+        setTone(m_serialStatusLabel, Tone::Ok);
+    } else if (!error.isEmpty()) {
+        m_serialStatusLabel->setText(QStringLiteral("Closed: %1").arg(error));
+        setTone(m_serialStatusLabel, Tone::Error);
+    } else {
+        m_serialStatusLabel->setText(QStringLiteral("Closed"));
+        setTone(m_serialStatusLabel, Tone::Hint);
     }
 }
 

@@ -180,6 +180,49 @@ When in doubt, the agent should implement the fix and note in the PR that
 design decisions need maintainer review. The project maintainer (Jeremy/KK7GWY)
 is the sole authority on visual design and UX direction.
 
+### TCI extensions beyond TCI 2.1
+
+[`GOVERNANCE.md`](GOVERNANCE.md) §"What requires an RFC" lists a TCI extension.
+This section states what that RFC and its PR carry, restating the policy ruled
+on #7312 and the admission bar ruled on #7516.
+
+A PR adds a TCI extension when it adds anything a client sees that the
+shipping TCI 2.1 spec (`docs/specs/tci/TCI Protocol 2.1.pdf`) does not define:
+a new command, a new argument, field or value on an existing command, or a new
+extension set. It is not considered until its body provides all of the
+following. An item given only in a comment counts once it is copied into the
+body, which becomes the squash commit on `main`.
+
+- **(a) User need**, including the named, **released** client (not one in
+  development) that requests the extension.
+- **(b) Prior art**: evidence of a search for an existing implementation
+  (TCI-X, another server) of what the extension does. Where one defines the
+  command, the extension adopts its name under our prefix.
+- **(c) Why base TCI 2.1 does not meet the need.**
+- **(d) A regression commitment**: the author fixes any command regression for
+  two releases after merge. A command that breaks in a release and is not fixed
+  by the next one is reverted.
+- **(e) A compatibility test plan** showing the extension does not break base
+  TCI 2.1 compatibility, with evidence that plain TCI 2.1 clients are
+  unaffected. The evidence includes base runs with WSJT-X showing no
+  compatibility breakage.
+
+The extension also follows the #7312 policy: it lives in the opt-in
+`aethersdr_` set (#7181), never as a bare command or a new meaning for a
+TCI 2.1 command; it arrives by RFC; and it does not extend the frozen legacy
+extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`, `rx_ctun_ex`,
+`dsb`).
+
+A bug fix to an existing command (a TCI 2.1 command, one in the `aethersdr_`
+set, or a legacy extension) that adds no command, argument, field, value or
+extension set is not a new extension, and neither is a behaviour change to a
+TCI 2.1 command; this section does not apply to them. That exemption does not
+lift #7312: a TCI 2.1 command's meaning changes only as a spec-compliance fix.
+
+Reviewers block a PR that adds an extension without items (a)–(e) or outside
+the #7312 policy. Only the maintainer can waive an item, by saying so on the
+PR.
+
 ## User documentation
 
 The user guide is docs-as-code in `docs/user/` (Docusaurus, served at
@@ -317,6 +360,8 @@ commits required, CODEOWNERS review required, conversations must be resolved,
 stale approvals are dismissed on push, branches auto-delete after merge. CI
 runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`; a new
 `find_package(...)` needs its `-dev` package in `.github/docker/Dockerfile`.
+Main Linux validation builds once in Full Suite and retains a test verdict for
+every commit; CI's Linux `build` job is PR-only. Windows/macOS still run in CI.
 Test registration, the frozen per-PR test gate, and gate integrity:
 [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
 
@@ -336,8 +381,8 @@ applets), `src/core/backends/` (one directory per radio family).
   + `MainWindow_*.cpp` sibling TUs. New feature code goes in a sibling, NOT
   `MainWindow.cpp` ([`docs/agents/gui.md`](docs/agents/gui.md))
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
-- `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
-  anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
+- `IRadioBackend` — the radio seam; seven implementors (flex, hl2, icom, sim,
+  anan, rtl, aetherd) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
 **Threading:** up to 14 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.

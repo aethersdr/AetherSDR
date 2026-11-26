@@ -2,6 +2,10 @@
 #include "core/AppSettings.h"
 #include "models/ConnectionWorkspace.h"
 #include "core/backends/flex/SmartLinkClient.h"
+#include "core/backends/icom/IcomCredentials.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/backends/aetherd/RemoteEngineStore.h"
+#endif
 #include "gui/ConnectionPanel.h"
 
 #include <QApplication>
@@ -72,6 +76,14 @@ struct ConnectionPanelSmartLinkTestAccess {
     static QString icomCredentialId(const ConnectionPanel& panel) { return panel.m_activeIcomCredentialId; }
     static bool legacyIcomCredential(const ConnectionPanel& panel) { return panel.m_allowLegacyIcomCredential; }
     static QString wanLabel(const ConnectionPanel& panel, const WanRadioInfo& radio) { return panel.formatWanRadioLabel(radio); }
+    static void connectWan(ConnectionPanel& panel, const WanRadioInfo& radio)
+    {
+        panel.m_wanRadios = {radio};
+        panel.m_wanList->clear();
+        panel.m_wanList->addItem(QStringLiteral("wan"));
+        panel.m_wanList->setCurrentRow(0);
+        panel.onWanConnectClicked();
+    }
 };
 }
 
@@ -695,6 +707,51 @@ int main(int argc, char** argv)
         panel.selectManualConnection();
         panel.findChild<QPushButton*>("connectionBackToStation")->click();
         check("Back to Locations retains the saved radio selection", panel.findChild<QComboBox*>("connectionWorkspacePath")->currentData().toJsonObject().value("id").toString() == "frozen-manual");
+
+        ConnectionPanel reconnect;
+        const QJsonObject savedTarget = reconnect.connectionTarget("frozen-manual");
+        reconnect.connectTarget(savedTarget);
+        reconnect.findChild<QLineEdit*>("connectionManualIcomUser")->setText("operator");
+        reconnect.findChild<QLineEdit*>("connectionManualIcomPassword")->setText("test-password");
+        QSignalSpy requests(&reconnect, &ConnectionPanel::connectRequested);
+        reconnect.probeRadio("192.0.2.42");
+        check("saved Icom dispatches the requested connection", requests.count() == 1);
+        // MainWindow adopts the target before setConnected commits Icom authentication.
+        reconnect.rememberSuccessfulTarget(reconnect.connectionTarget("frozen-manual"));
+        reconnect.selectWorkspaceProfile("stations", other);
+        const auto connections = [&](const QString& station) {
+            return ConnectionWorkspace::find(reconnect.workspaceSnapshot().value("stations").toArray(),
+                                             station).value("connections").toArray();
+        };
+        const QJsonArray otherBefore = connections(other);
+        reconnect.setConnected(true);
+        const QJsonArray saved = connections(home);
+        const QJsonObject entry = ConnectionWorkspace::find(saved, "frozen-manual");
+        check("saved Icom reconnect updates one path in the original Location",
+              saved.size() == 1 && connections(other) == otherBefore
+              && entry.value("name") == "Cabin Icom" && entry.value("serial") == "icom:192.0.2.42"
+              && !entry.value("credentialId").toString().isEmpty());
+
+        // A staged Icom attempt that never reached setConnected(false), then a
+        // SmartLink connect: the WAN session must not commit the Icom path.
+        ConnectionPanel wan;
+        wan.connectTarget(savedTarget);
+        wan.findChild<QLineEdit*>("connectionManualIcomUser")->setText("wan-operator");
+        wan.findChild<QLineEdit*>("connectionManualIcomPassword")->setText("unproven-password");
+        wan.probeRadio("192.0.2.42");
+        const auto wanPath = [&] {
+            const QJsonArray saved = ConnectionWorkspace::find(wan.workspaceSnapshot().value("stations").toArray(),
+                                                               home).value("connections").toArray();
+            return ConnectionWorkspace::find(saved, "frozen-manual");
+        };
+        const QJsonObject beforeWan = wanPath();
+        WanRadioInfo smartLinkRadio;
+        smartLinkRadio.serial = "1234-5678-9012-3456";
+        ConnectionPanelSmartLinkTestAccess::connectWan(wan, smartLinkRadio);
+        wan.setConnected(true);
+        check("a SmartLink connect does not commit a staged Icom attempt's path",
+              !beforeWan.isEmpty() && wanPath() == beforeWan);
+        IcomCredentials::clearSession();
     }
     {
         QJsonObject state = ConnectionWorkspace::load();
@@ -817,6 +874,34 @@ int main(int argc, char** argv)
             check("a typed password survives editing the user name", pass->text() == "typed");
         }
     }
+#ifdef HAVE_WEBSOCKETS
+    {
+        const QString engineId = QString(64, u'a');
+        const QString tailnetSerial = engineId + aetherd::RemoteEngineCredentials::kTailnetSuffix;
+        const QVariant lastSerial = settings.value("LastConnectedRadioSerial");
+        const QVariant autoConnect = settings.value("AutoConnectToLastRadio", "True");
+        settings.setValue("LastConnectedRadioSerial", tailnetSerial);
+        settings.setValue("AutoConnectToLastRadio", "True");
+        aetherd::RemoteEngineStore::save({engineId, "engine", "wss://192.0.2.7:8443",
+                                         "ws://100.101.102.103:8443", QString(64, u'b')});
+        ConnectionPanel panel;
+        RadioInfo offered;
+        QObject::connect(&panel, &ConnectionPanel::remoteEngineRestored, &panel,
+                         [&](const RadioInfo& radio) { offered = radio; });
+        QCoreApplication::processEvents();
+        check("startup hands off the remembered remote engine's selected route",
+              offered.serial == tailnetSerial && offered.address == QHostAddress("100.101.102.103")
+                  && offered.family == "aetherd");
+
+        aetherd::RemoteEngineStore::forget(engineId);
+        ConnectionPanel unpaired;
+        QSignalSpy unavailable(&unpaired, &ConnectionPanel::startupConnectUnavailable);
+        QCoreApplication::processEvents();
+        check("startup reports a saved remote engine with no credential", unavailable.size() == 1);
+        settings.setValue("LastConnectedRadioSerial", lastSerial);
+        settings.setValue("AutoConnectToLastRadio", autoConnect);
+    }
+#endif
     check("newer settings schema can be staged for guard test",
         settings.setRadioFeature("local", "", "ConnectionWorkspace", 2, document));
     check("newer schema is never loaded as an older document", ConnectionWorkspace::load().isEmpty());

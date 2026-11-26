@@ -54,7 +54,7 @@ struct IcomCivBackendTestAccess {
             static_cast<qsizetype>(packet.size())));
     }
     static void requestMedia(IcomSession& session, std::vector<std::vector<std::uint8_t>>& packets,
-                              std::uint8_t hint, int channels = 0)
+                              std::uint8_t hint, int channels = 0, std::uint8_t modelHint = 0)
     {
         session.m_control = new IcomStream(&session);
         IcomStreamTestAccess::capture(*session.m_control,packets);
@@ -64,6 +64,7 @@ struct IcomCivBackendTestAccess {
         session.m_authOk = true;
         session.m_advertisedCivAddress = hint;
         session.m_params.rxChannels = channels;
+        session.m_params.modelHint = modelHint;
         session.requestStreamsIfReady();
     }
     static bool queuedPtt(IcomCivBackend& backend, bool key, const TxCoordinator::Operation& operation)
@@ -267,6 +268,24 @@ int main(int argc, char** argv)
         IcomCivBackendTestAccess::pollLan(backend, true);
         IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
         check(audioFrames > 0 && warnings.size() == 2, "late AF readback resumes audio without another warning");
+    }
+    // Stock IC-7110 in Auto, then two explicit model choices at a different
+    // radio's factory address. A stale channel override cannot grant stereo.
+    struct MediaFixture {
+        std::uint8_t address, model;
+        int channels;
+        bool tx;
+    };
+    for (const MediaFixture row : {MediaFixture{0xBA, 0, 0, false},
+                                   MediaFixture{0x8E, 0xBA, 2, false},
+                                   MediaFixture{0xBA, 0xA2, 0, true}}) {
+        std::vector<std::vector<std::uint8_t>> packets;
+        IcomSession session;
+        IcomCivBackendTestAccess::requestMedia(session, packets, row.address, row.channels, row.model);
+        check(packets.size() == 1 && packets.front().size() > 0x73
+                  && packets.front()[0x71] == (row.tx ? 1 : 0)
+                  && packets.front()[0x72] == 4 && packets.front()[0x73] == (row.tx ? 4 : 0),
+              "the RS-BA1 request negotiates mono and sets TX permission from the chosen model");
     }
     for (const auto [hint,overrideChannels,expected] :
          {std::array<int,3>{0x98,0,16}, {0xb2,0,16}, {0x8e,0,16}, {0xa4,0,4}, {0x50,2,16}, {0x98,1,4}}) {

@@ -141,23 +141,25 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
     };
     const quint64 ticket = ++m_nextPanCreation;
     m_pendingPanCreations.insert(ticket, request);
-    QTimer* deadline = new QTimer(this);
-    deadline->setObjectName(QStringLiteral("panCreationDeadline"));
-    deadline->setSingleShot(true);
-    request->deadline = deadline;
-    connect(deadline, &QTimer::timeout, this, [alive, ticket] {
-        if (!alive) { return; }
-        const auto request = alive->m_pendingPanCreations.value(ticket);
-        if (!request || request->notified) { return; }
-        request->notified = true;
-        if (request->deadline) { request->deadline->deleteLater(); }
-        const PanCreationCompletion completion = std::exchange(request->completion, {});
-        if (request->owner && completion) {
-            completion({RadioControlReply::Kind::Failed, -1,
-                        QStringLiteral("pan creation outcome is unconfirmed; no retry was sent")}, nullptr);
-        }
-    });
-    deadline->start(10000);
+    if (!control->createWaitsForLocalBuild) {
+        QTimer* deadline = new QTimer(this);
+        deadline->setObjectName(QStringLiteral("panCreationDeadline"));
+        deadline->setSingleShot(true);
+        request->deadline = deadline;
+        connect(deadline, &QTimer::timeout, this, [alive, ticket] {
+            if (!alive) { return; }
+            const auto request = alive->m_pendingPanCreations.value(ticket);
+            if (!request || request->notified) { return; }
+            request->notified = true;
+            if (request->deadline) { request->deadline->deleteLater(); }
+            const PanCreationCompletion completion = std::exchange(request->completion, {});
+            if (request->owner && completion) {
+                completion({RadioControlReply::Kind::Failed, -1,
+                            QStringLiteral("pan creation outcome is unconfirmed; no retry was sent")}, nullptr);
+            }
+        });
+        deadline->start(10000);
+    }
     const RadioControlFence current = [alive, session, ticket] {
         if (!alive || !alive->controlSessionCurrent(session)) { return false; }
         const auto request = alive->m_pendingPanCreations.value(ticket);

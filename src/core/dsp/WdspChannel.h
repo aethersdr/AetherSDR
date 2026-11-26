@@ -152,6 +152,11 @@ public:
         // panel runs after the FM limiter, so 4.0 would lift its ~0.9 bound
         // past full scale (#7252).
         std::optional<double> fmRxPanelGain;
+        // RXA output panel copies I into Q (SetRXAPanelBinaural off), so L == R.
+        // Off keeps create_rxa()'s copy 0: L = I, R = Q, a 90 degree pair in
+        // SSB/CW/data and a silent R in AM/SAM under ANR or ANF. Receive-only;
+        // open() pushes it, and nothing else in WDSP rebuilds the panel.
+        bool rxPanelMono = false;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -586,6 +591,9 @@ public:
     // reaching WDSP. Otherwise returns WDSP's result, 0 for its refusal.
     static constexpr int kOpenProbeWouldOpen = -1;
     [[nodiscard]] static int openWithExchangeDepthForTest(int channelId, int exchangeDepth) noexcept;
+    // Test only: SetRXAPanelBinaural on an open receive channel (1 = copy 0, L = I, R = Q).
+    // An id outside 0..kWdspChannelCount-1 is ignored.
+    static void setRxPanelBinauralForTest(int channelId, int binaural) noexcept;
     // Process-global, test only (#5734, AetherSDR WDSP patch 13): the DSP
     // worker sleeps this long right after it has released a blocked
     // processIq(). That is the window in which, before patch 13, the host
@@ -607,6 +615,9 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // TXA's own ALC reduction in dB at the last block's end (0 = not acting);
+    // NaN on a receive channel.
+    [[nodiscard]] double txAlcReductionDbForTest() const noexcept;
     // ---- PureSignal (TX channels; calcc.c) ---------------------------------
     // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
     // (Hl2PureSignal). None takes the control fence: calcc guards its own state

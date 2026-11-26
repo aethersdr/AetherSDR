@@ -2,19 +2,19 @@
 title: "Networked Icom"
 slug: "/networked-icom"
 description: "AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol."
-status: "Early"
-applies_to: ["Networked Icom"]
+status: "Supported"
+applies_to: ["Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Early · **Applies to:** Networked Icom
+**Status:** Supported · **Applies to:** Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)
 
 :::
 
 AetherSDR can operate Icom transceivers that have a built-in network connection, using Icom's CI-V commands over the RS-BA1 network protocol. No Icom software and no USB cable are needed.
 
-The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Icom shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. FlexRadio remains AetherSDR's supported target; see [Supported Radios](./supported-radios.md).
+The **IC-705** and **IC-7300MK2** are supported and show no EXPERIMENTAL badge. Every other Icom shows the **EXPERIMENTAL** badge in the title bar and an "Experimental radio support" notice when you connect. See [Supported Radios](./supported-radios.md) for the full hardware list.
 
 ## Where to go next
 
@@ -26,16 +26,17 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 - [Memory Channels](./memory-channels.md): the shared bank, with import from the radio.
 - [USB Control Surfaces](./usb-control-surfaces.md): the Icom RC-28 remote encoder.
 
-## Requirements
+## Models
 
 | Model | Network | Status |
 |-------|---------|--------|
-| **IC-7300MK2** | Built-in Ethernet | **Supported**: no EXPERIMENTAL badge |
-| **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
-| **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
-| **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
-| **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
-| IC-905 | Ethernet | Listed in the model chooser, not verified |
+| **IC-705** | Wi-Fi | **Supported** |
+| **IC-7300MK2** | Built-in Ethernet | **Supported** |
+| **IC-7110** | Wi-Fi | **Experimental, receive-only**: MAIN tuning and one MAIN/SUB scope. **Not hardware-confirmed.** |
+| **IC-9700** | Ethernet | **Experimental**: works, with read-only memories |
+| **IC-7610, IC-7760** | Ethernet | **Experimental**: initial MAIN/SUB bring-up, hardware qualification pending |
+| **IC-7851** | Ethernet | **Experimental**: MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
+| **IC-905** | Ethernet | **Experimental**: listed in the model chooser, not verified |
 
 The original IC-7300 has no network port and is not in the model list.
 
@@ -43,11 +44,11 @@ The original IC-7300 has no network port and is not in the model list.
 
 ### On the radio
 
-Enable network (remote) control and create a network user name and password. AetherSDR uses the radio's three UDP ports, which start at 50001 by default (control, CI-V, audio). The IC-705 must be on your Wi-Fi network; the IC-7300MK2 and IC-9700 use Ethernet.
+Enable network (remote) control and create a network user name and password. AetherSDR uses the radio's three UDP ports, which start at 50001 by default (control, CI-V, audio). Connect the IC-705 or IC-7110 to your Wi-Fi network. The IC-7300MK2 and IC-9700 use Ethernet.
 
 ### Connecting
 
-Networked Icoms are not discovered automatically. Open **File → Connect to Radio...**, choose **+ Add radio by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
+To add a radio, open **File → Connect to Radio...**, choose **+ Add radio by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
 
 <img src="/img/screens/connect-icom-rows.png" width="912" alt="Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander." />
 
@@ -59,13 +60,13 @@ Networked Icoms are not discovered automatically. Open **File → Connect to Rad
 | **Icom user:** | The network user name configured on the radio. |
 | **Icom password:** | The network password configured on the radio. It is stored in the operating system's credential store, never in the settings file, and only after a successful connect. |
 | **Icom ports:** | **Standard (50001–50003)**, or **Custom NAT ports...** with a **First UDP port:**. AetherSDR uses that port and the next two. Different port triplets let you reach several radios behind one NAT router. |
-| **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address is not silently corrected: the connection gets no frequency, panadapter or transmit. |
+| **Icom CI-V:** | **Auto-detect (recommended)** asks the radio for its own CI-V address. You can also pick a model from the list, or **Custom...** and type a hex **CI-V address:** (for example `A2`, from the radio's MENU > SET > Connectors > CI-V). A wrong address prevents the app from identifying the radio and enabling frequency readback, the panadapter, receive audio or transmit. |
 
-Click **Connect by IP**. The model is identified over the wire, not from the radio's name. If the handshake fails, the message names the target and the likely cause.
+Choose **Connect by IP**. After a successful login, the radio appears in your selected location. Next time, select it in the chooser and click **Connect**. With **Auto-detect (recommended)**, AetherSDR identifies the IC-705 by CI-V. The model list also offers **IC-705 — A4** for its factory address. If the handshake fails, the message names the target and the likely cause.
 
 ### Wake Icom on connect
 
-**Wake Icom on connect**, near the bottom of the Connect to Radio window, is off by default. When it is on and the radio does not answer identification, AetherSDR wakes a supported model (IC-705, IC-7300MK2 or IC-9700) from standby once. It never puts the radio to sleep on disconnect. The radio's network interface must stay reachable in standby, so a Wi-Fi radio that has dropped off the network cannot be woken. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
+**Wake Icom on connect**, near the bottom of the Connect to Radio window, is off by default. When it is on and the radio does not answer identification, AetherSDR wakes a model with wake support (IC-705, IC-7300MK2 or IC-9700) from standby once. It never puts the radio to sleep on disconnect. The radio's network interface must stay reachable in standby, so a Wi-Fi radio that has dropped off the network cannot be woken. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
 
 ## Using a Networked Icom
 
@@ -77,7 +78,7 @@ AetherSDR treats an Icom differently from a FlexRadio:
 What you can do:
 
 - **Panadapter** from the radio's own scope. A recognized model with scope support has **one panadapter**, and the dual-receiver IC-7610, IC-7760 and IC-7851 have **two**, one for MAIN and one for SUB (see [below](#ic-7610-ic-7760-and-ic-7851)). Until the model is identified, or if it has no supported scope, its capacity is zero: **Tools → Add Panadapter...** is unavailable, and the status-bar **Add Panadapter** shortcut reports the capacity limit without opening the layout chooser.
-- **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept.
+- **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept. The RX noise blanker works at slice level. The ANT panel dims WNB on Icom radios that lack a panadapter-wide blanker.
 - **Filters:** the radio's real IF width is read back, the filter buttons are ordered narrow to wide for the mode, twin PBT is supported, and TX low/high cut follow what the model supports.
 - **Status bar:** the radio's **Network Radio Name** (the name set in its network settings) is shown, separate from model and callsign.
 - **Radio Health** (**Tools → Radio Health...**) shows the radio's modulation inputs and levels.
@@ -85,6 +86,8 @@ What you can do:
 - **Memory channels** use AetherSDR's shared bank on this computer, and the radio's own memories can be read in on models that support it. The IC-9700's radio memories are read-only.
 
 ### Panadapter scope modes
+
+The IC-705's receive attenuator offers OFF and 20 dB below 74.800000 MHz. The ATT button is dimmed until the radio confirms its frequency and at or above 74.800000 MHz. Returning to a supported band refreshes the button from the radio.
 
 The panadapter is the radio's own scope, and the radio owns the scope mode. On the IC-7300MK2, the IC-705 (firmware 1.20 or later) and the IC-9700 (firmware 1.30 or later) the **Scope** row in the Display panel offers the radio's three modes:
 
@@ -142,6 +145,24 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 - **WFM** (broadcast FM) is receive-only.
 - GPS location and NTP time controls. The power gauge uses a QRP scale.
 - AetherSDR warns if the radio's MOD Input is not WLAN.
+
+### IC-7110
+
+In **Connect by IP**, the **IC-7110 region** row shows when **Icom CI-V:** is **Auto-detect (recommended)** or **IC-7110**. Set it to the radio's market and save or connect; AetherSDR remembers the region for that host and port. Choosing another model, or **Custom...**, hides the row and keeps the saved region. The factory CI-V address is `BA`. The radio's identity reply activates the receive-only profile.
+
+| Radio region | Receive tuning in AetherSDR |
+| --- | --- |
+| United States | 30 kHz–148 MHz and 420–450 MHz |
+| Europe | 30 kHz–146 MHz and 430–440 MHz, including a **4 m** band button for 70 MHz |
+| Japan / other / unknown (default) | 30 kHz–146 MHz and 430–440 MHz |
+
+These limits apply to tuning from AetherSDR. The slice follows the frequency the radio reports, and the status bar warns once per connection if it falls outside the selected region's limits. Full US and European receive ranges still need hardware confirmation. [US amateur allocations](https://www.arrl.org/frequency-bands) · [Icom's European 70 MHz variant](https://www.icomjapan.com/news/4765/) · [IARU Region 1 band plans](https://www.iaru-r1.org/on-the-air/band-plans/) · [Icom Japan receiver specifications](https://www.icom.co.jp/lineup/products/IC-7110/?open=4)
+
+AetherSDR opens one slice for MAIN's selected VFO. With the scope on MAIN you can tune it and select its mode and filter preset. The front panel can remain focused on SUB. Choose the scope source on the radio, or use `civ scopesource main` or `civ scopesource sub` on the automation bridge. When you select SUB, the status bar identifies the preview and the panadapter shows SUB's spectrum and waterfall. Return the scope to MAIN to tune in the app.
+
+The bridge commands `civ dualwatch on` and `civ dualwatch off` request Dualwatch changes, and `civ profile` reports the state the radio confirmed. Switching the scope to SUB with Dualwatch off still needs hardware confirmation. The radio can mute SUB when both frequencies use the same RF group. Independent SUB tuning, separate receiver audio and transmission await hardware qualification.
+
+For speaker audio, select **AF** in the radio's **Wi-Fi AF/IF Output** menu. AetherSDR waits for that setting before playing the mono station audio. The IC-7110 profile leaves per-receiver TCI audio unavailable until the Wi-Fi channel mapping is verified.
 
 ### IC-9700
 
@@ -224,9 +245,9 @@ outside this initial support.
 
 ## Troubleshooting
 
-### Connected, but no frequency, panadapter or transmit
+### Connected, but no frequency, panadapter, audio or transmit
 
-The **Icom CI-V:** address is wrong. AetherSDR does not correct a wrong address silently.
+Check the **Icom CI-V:** address. Receive audio and transmit eligibility wait for the radio's model identification.
 
 1. Disconnect and open **Connect by IP** with **Radio type:** set to **Icom (network)**.
 2. Set **Icom CI-V:** to **Auto-detect (recommended)**.

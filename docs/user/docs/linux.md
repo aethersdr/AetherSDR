@@ -63,6 +63,30 @@ Most USB accessories are root-only on Linux until a udev rule or group membershi
 
 After changing your groups, log out and back in.
 
+### Serial PTT/CW port won't open
+
+If **Open** in **Settings → Radio Setup... → Serial & Controllers** fails, AetherSDR shows a **Serial Port Open Failed** dialog with the operating system's error and the full device path, for example:
+
+> Permission denied: Can't open /dev/ttyUSB0 (errno 13)
+
+The status next to the buttons stays **Closed** and shows the same error, and **Open** stays available so you can retry. The same dialog appears if **Auto-open serial port on startup** fails.
+
+For a permission error on a device owned by a serial group, the dialog names the group (read from the device, usually `dialout`, or `uucp` on Arch) and the command to run. AetherSDR only shows the commands; it never runs them:
+
+```bash
+sudo usermod -aG dialout "$USER"
+# or, on Debian/Ubuntu:
+sudo adduser "$USER" dialout
+```
+
+Use the group named in the dialog. Then **log out of your desktop session and log back in** (group membership is only read at login), relaunch AetherSDR, and click **Open** again. Run `id` to confirm the group is listed.
+
+Other errors get their own advice instead of group advice:
+
+- **No such file or directory**: the interface is unplugged or was renamed. Plug it in and choose it again from the port list.
+- **Device or resource busy**, or a locking error: another program (another AetherSDR, a logger, a CAT or digital-mode program, ModemManager) has the port open. Close it and click **Open** again.
+- Anything else: inspect the device with `ls -l /dev/ttyUSB0`, `getfacl /dev/ttyUSB0` and `id`.
+
 ## Using AetherSDR on Linux
 
 ### What is different on Linux
@@ -121,6 +145,7 @@ This is worth trying first on a Raspberry Pi whose Mesa driver is newer than its
 - On Ubuntu 26.04 under native Wayland, the panadapter and waterfall can update very slowly ([#4725](https://github.com/aethersdr/AetherSDR/issues/4725)).
 - On some X11 desktops with recent NVIDIA cards the AppImage shows no spectrum or waterfall and the Connect to Radio window never appears ([#4998](https://github.com/aethersdr/AetherSDR/issues/4998)).
 - On a Raspberry Pi 5 with software rendering, the spectrum heat-map fill can use almost all of the main thread, so the window stops responding to clicks under extra load ([#5192](https://github.com/aethersdr/AetherSDR/issues/5192)).
+- On a Bluetooth headset in hands-free mode, receive audio plays, but CW sidetone, the Quindar monitor, QSO recording playback, the Pudu monitor and the WAV player stay silent ([#7618](https://github.com/aethersdr/AetherSDR/issues/7618)).
 
 ## Troubleshooting
 
@@ -168,6 +193,12 @@ The PipeWire library is installed but PipeWire's client configuration is not, so
 2. Restart AetherSDR.
 
 On source builds for Ubuntu or Linux Mint whose device lists show only "Dummy Output", see the distro notes in [docs/BUILDING.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/BUILDING.md#distro-notes).
+
+### A Bluetooth headset in hands-free mode
+
+In hands-free mode (HFP/HSP, the profile that also carries the headset's microphone), the headset's output is mono, often at 16 kHz. AetherSDR plays receive audio on it in mono, mixing the left and right channels at equal level, so a slice panned hard to one side is quieter than on a stereo output. For stereo receive audio, switch the headset to its A2DP profile and use another microphone.
+
+If receive audio could not open on an output, it opens without a restart once you choose another output, or, if AetherSDR follows the system default, once the system default changes.
 
 ### A USB knob, dial or Stream Deck is not found
 

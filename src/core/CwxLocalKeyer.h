@@ -44,6 +44,9 @@ public:
     // Install before start(). The run's first key-down waits until `t`, so a
     // new run keeps its distance from the previous run's last key-up.
     void setNotBefore(std::chrono::steady_clock::time_point t) { m_notBefore = t; }
+    // Install before start(). A segment that starts after a drain waits this
+    // many units, at its own speed, after the drain's key-up (0: none).
+    void setSpacingAfterDrain(int units) { m_spacingAfterDrainUnits = units; }
 
     // True when the whole message can be keyed with this encoder.
     static bool canEncode(const QString& text);
@@ -105,6 +108,8 @@ private:
     // its CharGap, as it would inside one entry (4u + 3u = 7u, #2417).
     bool          m_owesCharGap{false};
     std::chrono::steady_clock::time_point m_notBefore{};
+    int           m_spacingAfterDrainUnits{0};
+    std::chrono::steady_clock::time_point m_drainedUpAt{};   // the last drain's key-up
     // Drift-corrected scheduling: an absolute target edge time vs an elapsed
     // reference, so a late wake is followed by a correspondingly shorter wait.
     // Without this, scheduler jitter would push each successive edge later and

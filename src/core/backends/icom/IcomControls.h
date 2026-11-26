@@ -101,7 +101,7 @@ struct ControlSpec {
     IcomFeature requiredFeature = IcomFeature::Core;
 };
 
-[[nodiscard]] std::span<const ControlSpec> controlSpecs();
+[[nodiscard]] std::span<const ControlSpec> controlSpecs(const IcomModelProfile& profile = {});
 [[nodiscard]] bool controlSupported(const IcomModel& model,
                                     const IcomModelProfile& profile,
                                     const ControlSpec& spec) noexcept;

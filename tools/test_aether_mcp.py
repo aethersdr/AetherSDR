@@ -18,6 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -218,6 +219,83 @@ def test_token_attached():
         aether_mcp.bridge_socket_path = orig_sockpath
         aether_mcp.bridge_request = orig_req
         del os.environ["AETHER_MCP_TOKEN"]
+
+
+def test_agent_activity_session():
+    bridge = Mock(sock_path="/tmp/first.sock")
+    bridge.request.side_effect = [
+        {"ok": True, "active": True}, {"ok": True, "active": True},
+        {"ok": True, "active": True}, {"ok": True, "active": False}]
+    work = Mock()
+    with patch.object(aether_mcp, "Bridge", side_effect=[bridge, work]) as factory, \
+         patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/tmp/first.sock"}, clear=False):
+        try:
+            result = aether_mcp.handle_tool("set_agent_activity", {})
+            check("missing text cannot accidentally release activity", result.get("isError"))
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+            os.environ["AETHER_MCP_SOCKET"] = "/tmp/second.sock"
+            check("active wrapper pins its selected application",
+                  aether_mcp.bridge_socket_path() == "/tmp/first.sock")
+            _REAL_BRIDGE_REQUEST({"cmd": "get", "model": "meters"})
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing tuning"})
+            aether_mcp.handle_tool("set_agent_activity", {"text": ""})
+            requests = [args[0][0] for args in bridge.request.call_args_list]
+            check("only explicit activity reports use the owner connection",
+                  factory.call_count == 2 and work.request.call_count == 1
+                  and [r.get("text") for r in requests] == ["Testing meters", "Testing meters", "Testing tuning", ""])
+            check("release closes the connection and drops the instance pin",
+                  bridge.close.call_count == 1 and aether_mcp.bridge_socket_path() == "/tmp/second.sock")
+        finally:
+            aether_mcp._close_activity_bridge()
+
+
+def test_agent_activity_pin_cleanup():
+    def claim():
+        aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+
+    owner = Mock(sock_path="/old")
+    owner.request.return_value = {"ok": True, "active": True, "expiresInMs": 300000}
+    with patch.dict(os.environ, {"AETHER_MCP_SOCKET": "/old"}, clear=True), \
+         patch.object(aether_mcp, "Bridge", return_value=owner) as factory, \
+         patch.object(aether_mcp.time, "monotonic", return_value=0) as clock:
+        try:
+            claim()
+            os.environ["AETHER_MCP_SOCKET"] = "/next"
+            clock.return_value = 299
+            check("instance pinned before deadline", aether_mcp.bridge_socket_path() == "/old")
+            clock.return_value = 300
+            check("expiry drops the pin", aether_mcp.bridge_socket_path() == "/next" and owner.close.called)
+            os.environ["AETHER_MCP_SOCKET"] = "/old"
+            claim()
+            os.environ["AETHER_MCP_SOCKET"] = "/next"
+            factory.side_effect = ConnectionRefusedError()
+            try:
+                _REAL_BRIDGE_REQUEST({"cmd": "get", "model": "meters"})
+            except ConnectionRefusedError:
+                pass
+            check("failed connect drops pin without retry", aether_mcp.bridge_socket_path() == "/next"
+                  and factory.call_count == 3)
+            factory.side_effect = None
+            claim()
+            owner.request.return_value = {
+                "ok": False, "error": "activity must contain display text; send an empty string to release"}
+            aether_mcp.handle_tool("set_agent_activity", {"text": "​"})
+            check("an undisplayable report keeps the claim and pin",
+                  aether_mcp.bridge_socket_path() == "/old" and aether_mcp._activity_bridge is owner)
+            owner.request.return_value = {"ok": False, "error": "unauthorized: missing or invalid token"}
+            aether_mcp.handle_tool("set_agent_activity", {"text": "Testing meters"})
+            check("a refused report on the held connection drops the pin",
+                  aether_mcp.bridge_socket_path() == "/next" and aether_mcp._activity_bridge is None)
+            owner.request.return_value = {"ok": True, "active": True, "expiresInMs": 300000}
+            claim()
+            owner.request.side_effect = BrokenPipeError()
+            result = aether_mcp.handle_tool("app_instance", {"action": "launch"})
+            check("dead owner does not block a fresh launch",
+                  "requires AETHER_MCP_TOKEN" in result["content"][0]["text"]
+                  and aether_mcp._activity_bridge is None)
+        finally:
+            aether_mcp._close_activity_bridge()
 
 
 def test_gesture_session():
@@ -822,6 +900,8 @@ def test_read_only_reflected():
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
+    test_agent_activity_session()
+    test_agent_activity_pin_cleanup()
     test_gesture_session()
     test_owned_process_shutdown()
     test_secure_app_instance()

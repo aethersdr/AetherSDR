@@ -42,6 +42,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -54,7 +55,7 @@
 // Hl2Backend.h seeds m_alcTargetPeak with a literal (it can only
 // forward-declare Hl2TxDsp); this keeps the seed equal to the modulator's
 // default so a pre-connect snapshot is honest.
-static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
+static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.95,
               "Hl2Backend.h seeds m_alcTargetPeak with this value — keep them equal");
 
 // lcHl2Tx moved to LogManager.h/.cpp beside every other category: this string
@@ -377,6 +378,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
     }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
+    // The operator's CW edge lead (#7245), a setting of this computer. Queued:
+    // the lead is the I/O thread's; re-read at every connect below.
+    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                              Q_ARG(int, Hl2Settings::cwEdgeLeadMs()));
 
     // The rate-change build thread — see the member declarations. Started here
     // and never restarted: it is idle except during a pan-bandwidth crossing,
@@ -416,6 +421,19 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
         if (!m_cwAutoKeyed) {
             return;
+        }
+        // A key-up the I/O thread shifted (#5065) reaches the wire later than
+        // its instant plus the lead; the hang counts from the wire. An atomic
+        // read, the only state of m_metis touched here.
+        if (m_metis) {
+            const auto onAir = m_metis->cwScheduledUpOnAir();
+            const auto due = onAir + std::chrono::milliseconds(m_cwHangDelayMs);
+            const auto now = std::chrono::steady_clock::now();
+            if (onAir != std::chrono::steady_clock::time_point{} && due > now) {
+                m_cwHangTimer->start(static_cast<int>(
+                    std::chrono::ceil<std::chrono::milliseconds>(due - now).count()));
+                return;
+            }
         }
         m_cwAutoKeyed = false;
         const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
@@ -530,6 +548,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
+    // Once per over (#5065); queued from the I/O thread to this one. The over
+    // itself still ends with the break-in hang.
+    connect(m_metis, &MetisClient::cwOverRefused, this, [this] {
+        emit transmitFailed(tr("CW keying fell too far behind"));
+    });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         ++m_swrPublicationEpoch;
         // No link, no observation: a PTT the radio last reported ends here, so the
@@ -611,7 +634,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
     // fed from alcPeak() and not from the alcGain() signal sitting next to it.
     // alcGain answers "how hard is the ALC working"; the gauge asks "how close
-    // to full modulation am I", and on a chain whose ALC targets 0.85 those two
+    // to full modulation am I", and on a chain whose ALC targets 0.95 those two
     // move in opposite directions.
     connect(m_txDsp, &Hl2TxDsp::alcPeak, this, [this](float dbfs) {
         m_alcPeakDbfs = dbfs;
@@ -1390,7 +1413,22 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
         }
         publishIoDsps();
         if (txWasHere) {
-            retuneReceiver(m_txDdc);
+            // Keyed, the hand-off is a mode change mid-over, which splatters
+            // (#7553), and the receiver cannot be kept: the over ends here,
+            // through the unkey every other path uses. Its MOX-off, modulator
+            // reset and IQ flush are queued to the I/O thread before the
+            // hand-off's setMode, so they run first. A PTT the radio still
+            // holds defers the hand-off to its release (settleTxHandover()).
+            if (transmitKeyed()) {
+                qCWarning(lcHl2) << "HL2: the TX receiver's DSP failed while keyed"
+                                    " — ending the over";
+                emit transmitFailed(tr("TX receiver failed; transmission stopped."));
+                if (m_keyed || m_tuning) {
+                    setKeying(false, m_lastTxOperation);
+                }
+            }
+            m_txHandoverOwed = true;
+            settleTxHandover();
         }
         emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
                                   QString::fromStdString(error));
@@ -1469,6 +1507,15 @@ bool Hl2Backend::removePanadapter(const QString& panId)
         // there would be nothing to hear, nothing to display, and no pane left
         // to reopen one from. Closing the last pan is refused, not obeyed.
         qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
+        return false;
+    }
+    // Closing the TX-owning receiver hands transmit to another one, which is a
+    // TX-slice change; while keyed that is refused like setTxSlice() (D1). The
+    // pan stays: RadioModel only drops it on panRemoved. Disconnect does not
+    // come through here (releaseReceiverDsps()).
+    if (ddc == m_txDdc
+        && refuseTransmitChangeWhileKeyed(ids->uiNumber,
+                                          tr("TX panadapter can't close while transmitting."))) {
         return false;
     }
     m_replayUnreopened.clear();   // see createPanadapter()
@@ -1559,15 +1606,38 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");
     publishWideState();
-    // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
-    // TX register (with the new owner's XIT) leaves the closed receiver.
     if (txMoved) {
-        retuneReceiver(m_txDdc);
+        handTransmitToOwner();
     }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
     notifyOperatingStateChanged();
     return true;
+}
+
+// Pays a hand-off owed since a keyed TX receiver failed, once nothing keys the
+// radio: called at the host unkey and at the radio-PTT release.
+void Hl2Backend::settleTxHandover()
+{
+    if (!m_txHandoverOwed || transmitKeyed()) {
+        return;
+    }
+    m_txHandoverOwed = false;
+    handTransmitToOwner();
+}
+
+// Transmit moved to m_txDdc without setTxSlice() (its receiver closed or its
+// DSP build failed): re-run the new owner's tune, so the TX register (with its
+// XIT) leaves the old receiver, and push its mode and passband, or the new TX
+// slice shows one mode while the modulator sends the old receiver's (#7586).
+void Hl2Backend::handTransmitToOwner()
+{
+    retuneReceiver(m_txDdc);
+    if (const Receiver* owner = rx(m_txDdc); owner && m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+            Q_ARG(WdspChannel::Mode, modeFromString(owner->mode)));
+        pushTxPassband(owner->mode);
+    }
 }
 
 void Hl2Backend::publishWideState()
@@ -1677,6 +1747,9 @@ void Hl2Backend::onRadioPttChanged(bool keyed, bool keyRequest)
     // release. Nothing here reaches MetisClient: the radio keyed itself. The
     // edge rides transmitChanged as radioPtt, and RadioModel decides whether
     // the host keys its modulator through the normal gated path (#5998).
+    if (!keyed) {
+        settleTxHandover();
+    }
     if (m_keyed) {
         return;
     }
@@ -2403,6 +2476,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // removePanadapter() refuses closing the TX pan while keyed (D1, #7553).
+    c.panLifecycleControl->txPanCloseWhileKeyed = PanLifecycleControl::TxPanCloseWhileKeyed::Refused;
     // No Flex stream plane: receive audio is native and graphic EQ is host-side.
     c.audioStreamControl = std::nullopt;
     c.radioGraphicEqControl = std::nullopt;
@@ -2593,6 +2668,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // requestTxSlice() refuses a TX move while keyed (#7553).
+    c.txSliceControl = RadioCapabilities::TxSliceControl{
+        RadioCapabilities::TxSliceControl::ChangeWhileKeyed::Refused};
     // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
     c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     // The nominal rating, not a calibration: forward-power metering stays
@@ -3575,7 +3653,9 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // Blocking: start() constructs the QUdpSocket, which must take the I/O
     // thread's affinity, and we need to know whether the bind succeeded.
     bool started = false;
-    QMetaObject::invokeMethod(m_metis, [this, &mp, &started] {
+    const int cwEdgeLeadMs = Hl2Settings::cwEdgeLeadMs();
+    QMetaObject::invokeMethod(m_metis, [this, &mp, &started, cwEdgeLeadMs] {
+        m_metis->setCwEdgeLeadMs(cwEdgeLeadMs);
         started = m_metis->start(mp);
     }, Qt::BlockingQueuedConnection);
     if (!started) {
@@ -3841,6 +3921,16 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         return;
     }
     const QString mode = canonicalOfferedMode(requested);
+    if (ddc == m_txDdc && transmitKeyed()) {
+        // The TX slice's mode is the transmitter's. A repeat of the current
+        // mode changes nothing, so only a change is announced; either way the
+        // republish puts SliceModel's optimistic mode back.
+        if (r->mode.compare(mode, Qt::CaseInsensitive) != 0) {
+            refuseTransmitChangeWhileKeyed(sliceId, tr("Mode can't change while transmitting."));
+        }
+        emitSliceState(ddc);
+        return;
+    }
 
     const QString previous = r->mode;
     r->mode = mode;
@@ -3929,9 +4019,10 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
         return;
     const QString m = mode.trimmed().toLower();
 
-    // AGC threshold: the slice's 0..100 maps to 0..60 dB of WDSP max gain, so
-    // the default 65 lands at 39 dB. Measured on WWV 10 MHz USB: clean through
-    // 40 dB, clipping hard by 50 dB.
+    // AGC threshold: the slice's 0..100 maps to 0..90 dB of WDSP max gain
+    // (Hl2DbReference::agcCeilingDbAtReference), the default 65 at 39 dB. One
+    // slice stays under full scale up to 90 dB; several are limited in
+    // mixReceiverAudio().
     // Validated on the way in so capture only stores what restore accepts; an
     // unknown mode string leaves the mode unchanged.
     if (!m.isEmpty() && isKnownAgcModeString(m)) {
@@ -4374,6 +4465,34 @@ void Hl2Backend::setActiveSlice(int sliceId)
     emitSliceState(ddc);
 }
 
+bool Hl2Backend::refuseTransmitChangeWhileKeyed(int sliceId, const QString& message)
+{
+    if (!transmitKeyed()) {
+        return false;
+    }
+    qCWarning(lcHl2).noquote() << "HL2: refused while transmitting (slice" << sliceId << "):"
+                               << message;
+    emit transmitChangeRefused(sliceId, message);
+    return true;
+}
+
+ReceiveDispatch Hl2Backend::requestTxSlice(int sliceId, bool enabled,
+                                           const RadioControlCompletion& completion,
+                                           const RadioControlFence& current)
+{
+    const int ddc = ddcForSlice(sliceId);
+    if (enabled && transmitKeyed() && ddc >= 0 && ddc != m_txDdc) {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        setTxSlice(sliceId);   // refuses, tells the operator and republishes
+        if (completion) {
+            completion({RadioControlReply::Kind::Refused, RadioControlReply::kRefusedWhileKeyed,
+                        QStringLiteral("TX slice can't change while transmitting.")});
+        }
+        return ReceiveDispatch::LocalOnly;
+    }
+    return IRadioBackend::requestTxSlice(sliceId, enabled, completion, current);
+}
+
 void Hl2Backend::setTxSlice(int sliceId)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -4381,6 +4500,12 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (!r) {
         qCWarning(lcHl2) << "HL2: cannot move transmit to slice" << sliceId
                          << "— no such receiver";
+        return;
+    }
+    if (ddc != m_txDdc
+        && refuseTransmitChangeWhileKeyed(sliceId, tr("TX slice can't change while transmitting."))) {
+        emitSliceState(ddc);
+        emitSliceState(m_txDdc);
         return;
     }
     if (ddc == m_txDdc) {
@@ -5305,10 +5430,10 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // Margin below alcTargetPeak that counts as quiet. Measured
         // (d81b-speech-pauses-alc, hpsdrsim loopback, not on air): speech
         // crest 18.87 dB (sd 0.80), burst spread <= 0.91 dB, and unity slider
-        // peaks 19.56-19.67 dB below target (-21.08/-20.97 dBFS vs
-        // 20*log10(0.85) = -1.4116 dBFS). So the margin must stay below
-        // 19.56 dB or unity operators are never told. 12.0 is chosen: fires on
-        // unity with 7.6 dB to spare, well clear of the measured noise. Only
+        // peaks 20.52-20.63 dB below target (-21.08/-20.97 dBFS vs
+        // 20*log10(0.95) = -0.4455 dBFS). So the margin must stay below
+        // 20.52 dB or unity operators are never told. 12.0 is chosen: fires on
+        // unity with 8.5 dB to spare, well clear of the measured noise. Only
         // bounded from one side; a leg at slider ~74 would bracket it.
         constexpr double kQuietMarginBelowTargetDb = 12.0;
         const double targetDbfs =
@@ -5497,10 +5622,10 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 applyRxAudioMute(false);
             }
         } else if (cwBreakIn && m_cwHangTimer
-                   && m_cwHangTimer->interval() < m_unkeyUnmuteHoldMs) {
+                   && m_cwHangDelayMs < m_unkeyUnmuteHoldMs) {
             // CW full break-in with a hang shorter than the hold skips the hold
             // (#5850), or the hold would outlast the inter-element space and
-            // kill QSK. Uses m_cwHangTimer's interval (the configured hang).
+            // kill QSK. Uses the configured hang, not the timer's lead-extended interval.
             // Longer hangs and semi-break-in get the ordinary hold. Cost: the
             // receiver hears PA decay per element; inter-element space
             // (1200/WPM ms) falls below the 70 ms hold at ~17 WPM.
@@ -5554,6 +5679,9 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 }
             }, Qt::QueuedConnection);
         }
+        // Behind the cleanup above: a hand-off owed since a keyed TX receiver
+        // failed reaches the modulator only after its reset.
+        settleTxHandover();
     }
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, [completion] { completion.finish(); }, Qt::QueuedConnection);
@@ -5570,12 +5698,27 @@ ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
         || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
         return ReceiveDispatch::Unsupported;
     }
-    setCwKeying(request.down, request.breakIn, request.breakInDelayMs,
-               command.operation, command.completion);
+    // A key-up a keyer stop cut short keys up at the stop: edges are placed
+    // at their instant here, so the deadline would keep the carrier on for
+    // the rest of the element (#5065). Other backends never read releaseAt.
+    const bool cut = !request.down && request.releaseAt != std::chrono::steady_clock::time_point{}
+        && request.releaseAt < request.scheduledAt;
+    keyCwEdge(request.down, request.breakIn, request.breakInDelayMs, command.operation,
+              command.completion, cut ? request.releaseAt : request.scheduledAt,
+              request.down ? request.releaseAt : std::chrono::steady_clock::time_point{});
     return ReceiveDispatch::Dispatched;
 }
 
 void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
+{
+    keyCwEdge(down, breakIn, breakInDelayMs, operation, completion, {}, {});
+}
+
+void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
+                           const TxCoordinator::Operation& operation,
+                           const TxCoordinator::Completion& completion,
+                           std::chrono::steady_clock::time_point scheduledAt,
+                           std::chrono::steady_clock::time_point releaseAt)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
@@ -5604,10 +5747,28 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
     if (m_cwHangTimer) {
         m_cwHangTimer->stop();
     }
-    m_cwHangCompletion = {}; // a fresh element supersedes that local hang
-    if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion] {
-            metis->setCwKeyDown(down, operation);
+    // A fresh element supersedes that local hang. The earlier element's own
+    // completion is still held by its scheduled release in MetisClient.
+    m_cwHangCompletion = {};
+    // A break-in key-down inside the hang. A fence of the run that raised MOX
+    // (a CWX clear, a refusal) drops it at the writer while this backend stays
+    // keyed, and the element would be admitted with nothing on EP2 (#7567).
+    // Its admission and the MOX it may raise again are one I/O-thread action:
+    // a frame built between them would pass the down's sample unkeyed.
+    const bool rekeyInHang = down && breakIn && m_keyed && m_cwAutoKeyed;
+    if (m_metis && rekeyInHang) {
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, operation, completion, scheduledAt,
+                                            releaseAt] {
+            if (metis->setCwKeyDownRaisingMox(operation, scheduledAt, releaseAt, completion) && dsp) {
+                dsp->reset();   // #7216, as applyKeying() does
+            }
+        }, Qt::QueuedConnection);
+    } else if (m_metis) {
+        // A scheduled key-up's completion goes with it: MetisClient releases it
+        // once the element's release is written to EP2, not when this returns.
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion, scheduledAt,
+                                            releaseAt] {
+            metis->setCwKeyDown(down, operation, scheduledAt, releaseAt, completion);
         }, Qt::QueuedConnection);
     }
 
@@ -5631,8 +5792,19 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
         constexpr int kCwEnvelopeReleaseMs = 6;
         m_cwHangOperation = operation;
         m_cwHangCompletion = completion;
-        m_cwHangTimer->start(std::max(kCwEnvelopeReleaseMs,
-                                      std::clamp(breakInDelayMs, 0, 2000)));
+        m_cwHangDelayMs = std::max(kCwEnvelopeReleaseMs, std::clamp(breakInDelayMs, 0, 2000));
+        // A scheduled key-up reaches the wire the over's lead after its
+        // instant (the lead in force, an atomic); the hang counts from there.
+        int untilOnAirMs = 0;
+        if (scheduledAt != std::chrono::steady_clock::time_point{} && m_metis) {
+            const auto onAir = scheduledAt + std::chrono::milliseconds(m_metis->cwEdgeLeadMs());
+            const auto ahead = onAir - std::chrono::steady_clock::now();
+            if (ahead > std::chrono::steady_clock::duration::zero()) {
+                untilOnAirMs = static_cast<int>(
+                    std::chrono::ceil<std::chrono::milliseconds>(ahead).count());
+            }
+        }
+        m_cwHangTimer->start(m_cwHangDelayMs + untilOnAirMs);
     } else if (!m_keyed && m_metis) {
         // A break-in-off key press without manual PTT produced no RF. Do not
         // leave CW owning the IQ stream after its release, or a later voice MOX
@@ -6556,6 +6728,26 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     lowHz = std::clamp(lowHz, 0, kTxAudioMaxHz - 50);
     highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
 
+    if (transmitKeyed()) {
+        // The pair published for the current mode: DIGU's 150..3000 even with
+        // a saved USB cut, which stays saved. A request for exactly that pair
+        // changes nothing, so it is not told as a refusal.
+        const Receiver* txRx = rx(m_txDdc);
+        const auto [shownLo, shownHi] = effectiveTxPassband(txRx ? txRx->mode : QStringLiteral("USB"));
+        if (lowHz != shownLo || highHz != shownHi) {
+            const auto* txIds = m_ids.byDdc(m_txDdc);
+            // -1 with no TX receiver: the Notice then goes to the TX or active slice's pan.
+            refuseTransmitChangeWhileKeyed(txIds ? txIds->uiNumber : -1,
+                                           tr("TX filter can't change while transmitting."));
+        }
+        // Put the Phone applet back on that pair.
+        TransmitDelta delta;
+        delta.txFilterLow = shownLo;
+        delta.txFilterHigh = shownHi;
+        emit transmitChanged(delta);
+        return;
+    }
+
     m_txFilterFromOperator = true;
     m_txFilterLowHz = lowHz;
     m_txFilterHighHz = highHz;
@@ -7046,6 +7238,37 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             applyHardwareOptions(next, /*persist=*/true);
             if (requestId != 0) {
                 emit extensionResult(requestId, hardwareOptionsReport());
+            }
+            return;
+        }
+        // The CW edge lead (#7245): a setting of this computer, not of the
+        // radio (Hl2Settings), so it needs no radio identity. Completes
+        // locally. A change made during an over takes effect when it ends.
+        if (verb == QLatin1String("cwlead.get") || verb == QLatin1String("cwlead.set")) {
+            int ms = Hl2Settings::cwEdgeLeadMs();
+            if (verb == QLatin1String("cwlead.set")) {
+                const QVariant v = arg.toMap().value(QStringLiteral("edgeLeadMs"));
+                bool ok = false;
+                const int asked = v.toInt(&ok);
+                if (!v.isValid() || !ok) {
+                    if (requestId != 0)
+                        emit extensionError(requestId, QStringLiteral("cwlead.set needs edgeLeadMs"));
+                    return;
+                }
+                ms = Hl2Settings::setCwEdgeLeadMs(asked);
+                if (m_metis) {
+                    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                                              Q_ARG(int, ms));
+                }
+                qCInfo(lcHl2) << "HL2 CW: edge lead" << ms << "ms";
+            }
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("edgeLeadMs"), ms},
+                    {QStringLiteral("minMs"), Hl2Settings::kCwEdgeLeadMinMs},
+                    {QStringLiteral("maxMs"), Hl2Settings::kCwEdgeLeadMaxMs},
+                    {QStringLiteral("defaultMs"), Hl2Settings::kCwEdgeLeadDefaultMs},
+                });
             }
             return;
         }
@@ -9413,6 +9636,7 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
+    m_txHandoverOwed = false;   // the new session pushes every receiver's state
     if (m_pureSignal) {
         QMetaObject::invokeMethod(m_pureSignal, "setKeyed", Qt::QueuedConnection,
                                   Q_ARG(bool, false));
