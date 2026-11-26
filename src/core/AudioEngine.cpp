@@ -205,6 +205,27 @@ qsizetype alignedStereoFloatBytes(qsizetype bytes)
     return (std::max<qsizetype>(0, bytes) / kFrameBytes) * kFrameBytes;
 }
 
+// RX device bytes -> the stereo Float32 bytes the drain mixes (#7616).
+qsizetype rxStereoBytesForDevice(qsizetype deviceBytes, int deviceChannels)
+{
+    return deviceChannels == 1 ? deviceBytes * 2 : deviceBytes;
+}
+
+// The RX mix as one channel: the average of each frame, so centred audio keeps
+// its level and the sum cannot clip (#7616).
+QByteArray downmixStereoFloatToMono(const QByteArray& stereo)
+{
+    const qsizetype frames =
+        alignedStereoFloatBytes(stereo.size()) / (2 * static_cast<qsizetype>(sizeof(float)));
+    QByteArray mono(frames * static_cast<qsizetype>(sizeof(float)), Qt::Uninitialized);
+    const auto* in = reinterpret_cast<const float*>(stereo.constData());
+    auto* out = reinterpret_cast<float*>(mono.data());
+    for (qsizetype frame = 0; frame < frames; ++frame) {
+        out[frame] = 0.5f * (in[frame * 2] + in[frame * 2 + 1]);
+    }
+    return mono;
+}
+
 qsizetype audioBytesForMsAtRate(int sampleRate, int ms)
 {
     if (sampleRate <= 0 || ms <= 0) {
@@ -2064,7 +2085,11 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
     const qsizetype capacity = m_audioSink ? m_audioSink->bufferSize() : 0;
     const qsizetype queued = std::clamp(capacity - freeBytes,
         qsizetype{0}, std::max(qsizetype{0}, capacity));
-    drainRxAudio(freeBytes, queued);
+    // Only an open device supplies device bytes; the Line Out budget is stereo.
+    const int channels =
+        (m_audioDevice && m_audioDevice->isOpen()) ? m_rxDeviceChannels.load() : 2;
+    drainRxAudio(rxStereoBytesForDevice(freeBytes, channels),
+                 rxStereoBytesForDevice(queued, channels));
 }
 
 void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedBytes)
@@ -2763,8 +2788,14 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedByte
         }
         captureLineOutAudio(chunk, sampleRate);
         if (retireInvalidPcmSources()) { return; }
-        len = m_audioDevice && m_audioDevice->isOpen()
-            ? m_audioDevice->write(chunk) : chunk.size();
+        if (!m_audioDevice || !m_audioDevice->isOpen()) {
+            len = chunk.size();
+        } else if (m_rxDeviceChannels.load() == 1) {
+            const qint64 written = m_audioDevice->write(downmixStereoFloatToMono(chunk));
+            len = written > 0 ? rxStereoBytesForDevice(written, 1) : written;
+        } else {
+            len = m_audioDevice->write(chunk);
+        }
         if (len > 0) {
             const qsizetype capturedBytes =
                 alignedStereoFloatBytes(
@@ -2803,8 +2834,10 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedByte
     }
 
     if (m_audioSink && sampleRate > 0) {
-        const qsizetype sinkBufferBytes = m_audioSink->bufferSize();
-        const qsizetype sinkFreeBytes = m_audioSink->bytesFree();
+        const qsizetype sinkBufferBytes =
+            rxStereoBytesForDevice(m_audioSink->bufferSize(), m_rxDeviceChannels.load());
+        const qsizetype sinkFreeBytes =
+            rxStereoBytesForDevice(m_audioSink->bytesFree(), m_rxDeviceChannels.load());
         const qsizetype sinkQueuedBytes =
             std::clamp(sinkBufferBytes - sinkFreeBytes,
                        static_cast<qsizetype>(0),
@@ -2894,7 +2927,7 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["state"] = rxRunning ? audioStateName(m_audioSink->state()) : QStringLiteral("Stopped");
     rx["error"] = rxRunning ? audioErrorName(m_audioSink->error()) : QStringLiteral("NoError");
     rx["sample_rate_hz"] = rxRunning ? QJsonValue(m_rxBufferSampleRate.load()) : QJsonValue();
-    rx["channel_count"] = rxRunning ? QJsonValue(2) : QJsonValue();
+    rx["channel_count"] = rxRunning ? QJsonValue(m_rxDeviceChannels.load()) : QJsonValue();
     rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
     rx["producer_sample_rate"] = m_rxProducerRate.load();
     rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate.load() != m_rxProducerRate.load()) : QJsonValue();
@@ -4138,6 +4171,7 @@ void AudioEngine::captureAutomationAudio(const QString& point,
 
 bool AudioEngine::startRxStream()
 {
+    m_rxStreamWanted = true;
     if (m_audioSink) return true;   // already running
 
     m_rxBuffer.clear();
@@ -4289,9 +4323,16 @@ bool AudioEngine::openRxSinkDevice(int producerRate)
     m_audioDevice = nullptr;
     QString lastRxError;
     bool triedFloatRung = false;
-    for (const QAudioFormat& candidate : rxLadder) {
+    for (QAudioFormat candidate : rxLadder) {
         if (candidate.sampleFormat() != QAudioFormat::Float)
             continue;   // RX drain writes Float PCM; Int16 rungs are for other sinks
+#ifndef Q_OS_MACOS
+        // QAudioSink::start() refuses a stereo format on a mono-only output (a
+        // Bluetooth hands-free link); open it mono and the drain downmixes (#7616).
+        // macOS keeps its telephony-route policy above (#1705).
+        if (dev.maximumChannelCount() == 1)
+            candidate.setChannelCount(1);
+#endif
         noteRxAttempt(candidate);
         auto* sink = new QAudioSink(dev, candidate, this);
         sink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
@@ -4311,6 +4352,7 @@ bool AudioEngine::openRxSinkDevice(int producerRate)
         if (io) {
             m_audioSink = sink;
             m_audioDevice = io;
+            m_rxDeviceChannels.store(candidate.channelCount() == 1 ? 1 : 2);
             setRxDeviceRate(candidate.sampleRate());
             if (triedFloatRung) {
                 noteRxFallback(QStringLiteral("preferred RX format unavailable -> %1 Hz")
@@ -4374,12 +4416,12 @@ bool AudioEngine::openRxSinkDevice(int producerRate)
         }, Qt::QueuedConnection);
     });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << m_rxOutputRate.load() << "Hz"
-                       << "device:" << dev.description();
+                       << "ch:" << m_rxDeviceChannels.load() << "device:" << dev.description();
     m_rxBufferSampleRate.store(m_rxOutputRate.load());
     AudioSummaryLogger::RxSinkSummary summary;
     summary.deviceDescription = dev.description();
     summary.sampleRate = m_rxOutputRate.load();
-    summary.channelCount = 2;
+    summary.channelCount = m_rxDeviceChannels.load();
     summary.sampleFormat = QAudioFormat::Float;
     summary.resamplingActive = (m_rxOutputRate.load() != m_rxProducerRate.load());
     summary.fallbackOccurred = rxFallbackOccurred;
@@ -4541,6 +4583,7 @@ void AudioEngine::captureLineOutAudio(const QByteArray& pcm, int sampleRate)
 
 void AudioEngine::stopRxStream()
 {
+    m_rxStreamWanted = false;
     stopSidetoneStream();
     stopQuindarLocalSink();
     if (m_lineOutCaptureEnabled) {
@@ -4587,6 +4630,7 @@ void AudioEngine::closeRxSink()
     m_pendingRxSinkRate.reset();
     m_rxSinkProducerRate = 0;
     m_audioDevice = nullptr;
+    m_rxDeviceChannels.store(2);
     m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
     if (m_audioSink) {
         // Null out m_audioSink BEFORE stopping so that the stateChanged
@@ -4912,8 +4956,10 @@ void AudioEngine::flushRxDevice()
         qCWarning(lcAudio) << "AudioEngine: RX sink restart after PCM retirement failed"
                           << m_audioSink->error();
         // A failed restart must not leave a nonnull sink that makes a later
-        // startRxStream() report success while the timer has no device.
+        // startRxStream() report success while the timer has no device. RX is
+        // still wanted, so a device change retries it.
         stopRxStream();
+        m_rxStreamWanted = true;
     }
 }
 
@@ -10199,8 +10245,8 @@ void AudioEngine::setOutputDevice(const QAudioDevice& dev, AudioDeviceSelection 
         s.save();
     }
 
-    // Restart RX stream if running
-    if (m_audioSink) {
+    // Restart RX if running, or retry it if its last open failed (#7616).
+    if (m_audioSink || m_rxStreamWanted) {
         stopRxStream();
         startRxStream();
     }
@@ -10234,7 +10280,7 @@ void AudioEngine::setInputDevice(const QAudioDevice& dev, AudioDeviceSelection s
 void AudioEngine::setAllowBluetoothTelephonyOutput(bool on)
 {
     const bool changed = (m_allowBluetoothTelephonyOutput.exchange(on) != on);
-    if (!changed || !m_audioSink) {
+    if (!changed || (!m_audioSink && !m_rxStreamWanted)) {
         return;
     }
 

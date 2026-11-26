@@ -714,6 +714,8 @@ public:
     double rxBufferPeakMs() const { return m_rxBufferPeakMs.load(); }
     quint64 rxBufferUnderrunCount() const { return m_rxBufferUnderrunCount.load(); }
     int rxBufferSampleRate() const { return m_rxBufferSampleRate.load(); }
+    // 1 on a mono-only RX output, else 2 (#7616).
+    int rxDeviceChannelCount() const { return m_rxDeviceChannels.load(); }
     int rxPlaybackQueuedMs() const
     {
         return m_rxPlaybackQueuedMs.load(std::memory_order_relaxed);
@@ -1137,6 +1139,14 @@ private:
     // The existing friend fixture injects just the external device-open
     // boundary. An empty callback uses the real QAudioSink opener below.
     std::function<bool(int)> m_rxSinkOpener;
+    // Channels of the open RX device: 1 on a mono-only output such as a
+    // Bluetooth hands-free link, else 2. The mix stays stereo; only the final
+    // write and the device byte budget use this (#7616). Atomic: the bridge's
+    // endpoint snapshot reads it.
+    std::atomic<int> m_rxDeviceChannels{2};
+    // RX was asked for and not deliberately stopped, so a device change
+    // retries an open that failed (#7616).
+    bool m_rxStreamWanted{false};
     bool openRxSink(int producerRate);
     bool openRxSinkDevice(int producerRate);
     void closeRxSink();

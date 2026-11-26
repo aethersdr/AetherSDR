@@ -3971,7 +3971,7 @@ Capture points:
 | `raw` | Flex/Kiwi float32 stereo PCM as it enters AudioEngine, useful for arrival-timing diagnostics |
 | `post` | Source-tagged Flex/Kiwi float32 stereo after client DSP/resampling, just before each source output FIFO |
 | `output` | Source-tagged Flex/Kiwi float32 stereo as the final mixer consumes each source FIFO; this is the Auto Assist estimator timing point |
-| `final` | Final mixed float32 stereo bytes accepted by the RX audio sink |
+| `final` | Final float32 stereo mix, for the frames the RX audio sink accepted. On a mono RX device (`channel_count` 1 in `get audio`) the sink is written their (L+R)/2 downmix, and the capture keeps the stereo mix (`channels: 2`) |
 
 The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 `sampleRate`, `channels`, `format: "float32le"`, `startNs`, `frames`, and
