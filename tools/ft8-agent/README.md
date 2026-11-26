@@ -81,6 +81,27 @@ The legacy waveform runs on a FLEX-6300. The container has not run on a radio.
 ⚠ Build on **Linux**. `tools/wspr-agent/build.py` is known to produce a package the radio
 silently refuses when run on Windows, and this script inherits its packaging.
 
+### Re-pinning: the archive bytes depend on the zlib, not only on the zig
+
+The pins in `src/core/Ft8Agent.h` are the size and SHA-256 of archives deflated by
+**stock zlib**. Check which one your Python has before comparing hashes:
+
+```sh
+python3 -c "import zlib; print(zlib.ZLIB_RUNTIME_VERSION)"
+```
+
+If that prints a version containing `zlib-ng` (the default on Arch, CachyOS and Fedora 40
+and later), `build.py` produces archives with a different size and hash and **identical
+contents**. That is not a change in the tree. To confirm it, compare the contents:
+
+- every member of `AetherFT8.ssdr_waveform` has the same CRC and size as in the pinned
+  package (`python3 -m zipfile -l`, or `unzip -v`);
+- the gunzipped layer of `AetherFT8.tar.gz` hashes to the same `diff_id` as the pinned
+  container's.
+
+Re-pin only from a machine with stock zlib, so that the next person can reproduce the
+bytes. `tools/wspr-agent/build.py` packages the same way and behaves the same.
+
 ### The ARM build under emulation
 
 ```

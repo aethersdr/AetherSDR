@@ -12,8 +12,15 @@ for both kinds of radio, as static binaries with the licenses:
     python3 -I build.py --output OUT_DIR [--host]
 
 Needs zig 0.17.0 (it bundles the linker and musl for both targets). The packages
-are reproducible byte for byte with the same zig. --host also builds a native
-binary for the tests.
+are reproducible byte for byte with the same zig AND the same zlib. --host also
+builds a native binary for the tests.
+
+The pinned archives were deflated by stock zlib. A Python linked against zlib-ng
+(zlib.ZLIB_RUNTIME_VERSION contains "zlib-ng"; the default on Arch, CachyOS and
+Fedora 40 and later) writes archives of a different size and SHA-256 with
+identical contents: every zip member keeps its CRC and size, and the container's
+gunzipped layer keeps its diff_id. So a hash mismatch on such a machine does not
+mean the tree changed; compare the contents, and re-pin only from stock zlib.
 
 This mirrors tools/wspr-agent/build.py deliberately, so that the two agents are
 packaged the same way. The difference is the decoder: ft8_lib needs only -lm,
