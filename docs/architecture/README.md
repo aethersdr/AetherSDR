@@ -84,5 +84,10 @@ predate the backend live in `tools/hl2/`.
   opcode subset and tuning-word derivation from FlexRadio's GPL source and
   public datasheets, and the capture program that must fill the transport gap.
 
+- [`kenwood-ts890-backend-design.md`](kenwood-ts890-backend-design.md) — proposed
+  RX-only TS-890S KNS Ethernet backend: protocol authority, out-of-process
+  dependencies under RFC #7277, capability scope and bounded certification.
+  Design approval is pending; PR #7118 remains the reference implementation.
+
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.
