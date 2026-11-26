@@ -173,6 +173,22 @@ constexpr std::int64_t kFrame = kTxSamplesPerPacket;
 static std::int64_t samplesOfMs(std::int64_t ms) { return ms * kRate / 1000; }
 static bool within(std::int64_t got, std::int64_t want, std::int64_t tol) { return got >= want - tol && got <= want + tol; }
 
+// The host-text rigs are paced off the wall clock, so under ASan/TSan (2-3x
+// slower) the first dit's fall lands a few samples late (2883..2886 of 2880 in
+// the 2026-11-26 sanitizer run, #7621). Widen only that length tolerance there.
+#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
+#  define AETHER_TEST_SANITIZED 1
+#elif defined(__has_feature)
+#  if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
+#    define AETHER_TEST_SANITIZED 1
+#  endif
+#endif
+#ifdef AETHER_TEST_SANITIZED
+constexpr std::int64_t kHostTextDitTol = 12;
+#else
+constexpr std::int64_t kHostTextDitTol = 2;
+#endif
+
 static void appendI(const std::array<std::uint8_t, kUsbPacketSize>& pkt, std::vector<int>& out)
 {
     constexpr std::size_t kSamplesPerFrame = static_cast<std::size_t>(kTxSamplesPerPacket) / 2;
@@ -567,8 +583,8 @@ static void testHostTextEngineLastElementIsWhole(int wpm, bool breakIn)
     }
     const std::int64_t unit = 1200 / wpm;
     const auto runs = carriers(rig.iTrace);
-    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(unit), 2)
-              && within(runs[1].length, samplesOfMs(unit), 2),
+    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(unit), kHostTextDitTol)
+              && within(runs[1].length, samplesOfMs(unit), kHostTextDitTol),
           name + "both dits are whole on EP2 (" + runsText(runs) + "; "
               + Hl2TxGateTestAccess::counters(*rig.backend) + ")");
     const std::int64_t lastEnd = runs.empty() ? 0 : runs.back().start + runs.back().length;
@@ -639,7 +655,8 @@ static void testHostTextSameSenderNextTextIsSpaced(std::int64_t secondAtMs, bool
     }
     const auto runs = carriers(rig.iTrace);
     const std::int64_t gap = runs.size() == 2 ? runs[1].start - (runs[0].start + runs[0].length) : -1;
-    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(kUnit), 2) && within(runs[1].length, samplesOfMs(kUnit), 2)
+    check(runs.size() == 2 && within(runs[0].length, samplesOfMs(kUnit), kHostTextDitTol)
+              && within(runs[1].length, samplesOfMs(kUnit), kHostTextDitTol)
               && gap >= samplesOfMs(7 * kUnit - 2) && gap <= samplesOfMs(7 * kUnit + 20),
           name + "both dits whole, a word space (420 ms) apart on EP2 (" + runsText(runs) + ", gap "
               + std::to_string(gap * 1000 / kRate) + " ms)");
