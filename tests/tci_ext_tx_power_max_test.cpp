@@ -469,6 +469,30 @@ void serverBehaviour()
         dump("a", got);
     }
 
+    // Closing the TX slice: once the close has settled, the last TX trx falls
+    // back to 0 and the line follows it. The fixture seam only removes a slice
+    // while disconnected, so the flag is lowered for that call alone.
+    s1->applyChanges(tuned(21.074, false));
+    s0->applyChanges(tuned(14.074, true));
+    check(waitFor([&] { return !ofItem(a.rx).isEmpty(); }), "TX back on slice 0 is heard");
+    settle(kQuietMs);
+    got = a.takeExtension();
+    check(ofItem(got) == one("aethersdr_tx_power_max:1,500;"), "slice 0 transmits on trx 1");
+    bench.backend->connected = false;
+    QString removeError;
+    const bool removed = model.automationRemoveSliceFixture(s0->sliceId(), &removeError);
+    bench.backend->connected = true;
+    check(removed, "the TX slice is closed");
+    // Past the 500 ms close settle and the notice limit. The re-announce on the
+    // lowered flag carries a 1,500 line first, so only the last line is checked.
+    settle(800);
+    got = a.takeExtension();
+    check(!ofItem(got).isEmpty() && ofItem(got).last() == QStringLiteral("aethersdr_tx_power_max:0,500;"),
+          "a closed TX slice: the line falls back to trx 0 once the close settles");
+    if (ofItem(got).isEmpty() || ofItem(got).last() != QStringLiteral("aethersdr_tx_power_max:0,500;")) {
+        dump("a", got);
+    }
+
     check(b.takeExtension().isEmpty(), "a client that never enabled the set heard none of it");
 }
 
