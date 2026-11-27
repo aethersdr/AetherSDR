@@ -1290,6 +1290,7 @@ signals:
     void connectionVersionReceived(const QString& version);
     void connected();
     void disconnected();
+    void disconnectStatus(const QString& message);
     void connectionError(const QString& reason);
 
     // A RADIO-CONFIGURATION problem the operator should fix that does not end the

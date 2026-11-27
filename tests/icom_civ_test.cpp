@@ -644,6 +644,10 @@ static void testCommands()
           "Power ON uses the guide's literal 18 01 encoding");
     check(bytesAre(cmdPowerOn(0xB6), {0xFE, 0xFE, 0xB6, 0xE0, 0x18, 0x01, 0xFD}),
           "IC-7300MK2 standard network power-on frame");
+    check(bytesAre(cmdPowerOff(0xB6), {0xFE, 0xFE, 0xB6, 0xE0, 0x18, 0x00, 0xFD}),
+          "IC-7300MK2 power-off matches the RS-BA1 standalone CI-V frame");
+    check(bytesAre(cmdPowerOff(0xA4), {0xFE, 0xFE, 0xA4, 0xE0, 0x18, 0x00, 0xFD}),
+          "IC-705 power-off uses the same command at its own address");
     const std::vector<std::uint8_t> wake = cmdPowerOn(0x50, 150, 0xE1);
     check(wake.size() == 157
               && std::all_of(wake.begin(), wake.begin() + 152,

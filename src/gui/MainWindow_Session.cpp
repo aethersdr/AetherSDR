@@ -1249,7 +1249,7 @@ void MainWindow::disconnectFromRadioByUser()
     // operator's rates rather than the cap for the next session.
     if (m_adaptiveThrottleActive)
         restorePreCapPanRates();
-    m_radioModel.disconnectFromRadio();
+    m_radioModel.disconnectFromRadio(true);
 }
 
 void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
@@ -1587,6 +1587,11 @@ void MainWindow::wireRadioModel()
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    connect(&m_radioModel, &RadioModel::disconnectStatus, this,
+            [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+        if (m_connPanel->isVisible()) { m_connPanel->setStatusText(message); }
+    }, Qt::QueuedConnection);
     // Radio configuration advice: shown, but it does NOT touch the session.
     // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
     // Advice belongs in the panel while it is open. Mid-session warnings need

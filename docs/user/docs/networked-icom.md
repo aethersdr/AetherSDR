@@ -64,9 +64,13 @@ To add a radio, open **File → Connect to Radio...**, choose **+ Add radio by I
 
 Choose **Connect by IP**. After a successful login, the radio appears in your selected location. Next time, select it in the chooser and click **Connect**. With **Auto-detect (recommended)**, AetherSDR identifies the IC-705 by CI-V. The model list also offers **IC-705 — A4** for its factory address. If the handshake fails, the message names the target and the likely cause.
 
-### Wake Icom on connect
+### Wake and standby
 
-**Wake Icom on connect**, near the bottom of the Connect to Radio window, is off by default. When it is on and the radio does not answer identification, AetherSDR wakes a model with wake support (IC-705, IC-7300MK2 or IC-9700) from standby once. It never puts the radio to sleep on disconnect. The radio's network interface must stay reachable in standby, so a Wi-Fi radio that has dropped off the network cannot be woken. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
+Open **Startup and connection preferences** near the bottom of the Connect to Radio window. **Wake Icom on connect and enter standby on disconnect** is off by default and uses your existing wake preference. When enabled, AetherSDR sends one wake request if an IC-705, IC-7300MK2, or IC-9700 in standby doesn't answer identification. For a custom CI-V address, pick the model in **Icom CI-V:** so AetherSDR knows which radio to wake.
+
+<img src="/img/screens/connect-icom-standby.png" width="760" alt="The Connect to a radio dialog with Startup and connection preferences expanded and the Icom wake and standby checkbox checked." />
+
+On the IC-705 (Wi-Fi) and IC-7300MK2 (built-in Ethernet), the same checkbox lets **Disconnect** request standby. Set the radio's **Power OFF Setting (for Remote Control)** to **Standby/Shutdown**. AetherSDR checks that setting and verifies receive state while it still controls the radio. If those checks fail or the radio is transmitting, disconnect completes and the status message explains why standby was skipped. The radio's network connection must remain reachable for the next wake request to work.
 
 ## Using a Networked Icom
 
@@ -273,7 +277,7 @@ The radio is not accepting network control from AetherSDR. The message names the
 
 AetherSDR does not wake the radio unless you ask it to.
 
-1. Tick **Wake Icom on connect** near the bottom of the Connect to Radio window.
+1. Tick **Wake Icom on connect and enter standby on disconnect** near the bottom of the Connect to Radio window.
 2. For a custom CI-V address, also pick the model in **Icom CI-V:**.
 3. On an IC-705, make sure the radio is still on your Wi-Fi network in standby; a radio that has dropped off the network cannot be woken.
 

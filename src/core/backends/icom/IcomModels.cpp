@@ -714,6 +714,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // on from Standby/Shutdown. Native RS-BA1 carries the standard frame;
         // no model-specific serial preamble is prescribed. Network must be up.
         .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
+        .remoteStandbyItem = 73,  // IC-705 CI-V guide: SET item 0073
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         // IC-705 receiver range transition: stage 2 ends at 74.800 MHz (#6497).
@@ -815,6 +816,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // Baud-dependent FE fill is explicitly for the REMOTE jack, not LAN.
         // Begin probing after one second; readiness comes from the identity reply.
         .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
+        .remoteStandbyItem = 109,  // IC-7300MK2 CI-V guide: SET item 0109
         .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
                                 "Group"},
         // IC-7300MK2 CI-V Reference Guide, SET > Network, printed p. 10.

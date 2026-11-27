@@ -753,6 +753,12 @@ int IcomSession::txAudioDrainMs() const
         + static_cast<int>(m_params.txBufferMs);
 }
 
+bool IcomSession::ownsCivStream() const noexcept
+{
+    return m_connected && m_authOk && m_haveRadioId && m_streamGranted
+        && m_control && m_control->isReady() && m_serial && m_serial->isReady();
+}
+
 void IcomSession::sendCiv(std::span<const std::uint8_t> frame,
                           const std::optional<TxCoordinator::Command>& command)
 {

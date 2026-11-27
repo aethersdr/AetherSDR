@@ -57,6 +57,13 @@ struct IcomCivBackendTestAccess {
         b.m_pendingPttIntent = keyed;
         b.m_pendingPttUntilMs = b.nowMs() + 1000;
     }
+    // Fixture for the state after an authenticated native stream has entered
+    // the standby preflight. The ownership check itself uses the ordinary
+    // disconnect entry point in a separate case.
+    static void awaitStandbySetting(IcomCivBackend& b)
+    {
+        b.m_standbyPhase = IcomCivBackend::StandbyPhase::ReadSetting;
+    }
     // Every frame the backend dispatched (its trace) or still holds queued.
     static std::vector<CivFrame> issued(const IcomCivBackend& b)
     {
@@ -2324,6 +2331,65 @@ void testScrubReasserts()
 
 }  // namespace
 
+void testStandbyDisconnectGuards()
+{
+    using Access = IcomCivBackendTestAccess;
+    for (const auto& [model, item] : {std::pair{"IC-705", 73}, std::pair{"IC-7300MK2", 109}}) {
+        IcomCivBackend b;
+        Access::prepare(b, model);
+        check(profileFor(b.model()).remoteStandbyItem == item, "standby uses the model's own SET item");
+        QSignalSpy status(&b, &IRadioBackend::disconnectStatus);
+        QSignalSpy disconnected(&b, &IRadioBackend::disconnected);
+        b.disconnectRadio({.requestStandby = true});
+        check(status.count() == 1 && disconnected.count() == 1,
+              "standby without an authenticated native session reports a skip and disconnects");
+        const auto issued = Access::issued(b);
+        check(std::none_of(issued.begin(), issued.end(), [](const CivFrame& frame) {
+            return frame.cmd == cmd::kPower;
+        }), "standby without ownership does not send power-off");
+    }
+    check(!profileFor(*modelForId(0xA2)).remoteStandbyItem, "IC-9700 keeps its wake-only profile");
+
+    const auto runPreflight = [](bool standbyAllowed, bool radioTransmits) {
+        IcomCivBackend b;
+        Access::prepare(b, "IC-7300MK2");
+        QSignalSpy disconnected(&b, &IRadioBackend::disconnected);
+        Access::awaitStandbySetting(b);
+        Access::deliver(b, {.cmd = kCivOk});
+        check(Access::issued(b).empty(), "an unrelated ACK cannot advance the standby preflight");
+        Access::deliver(b, {.cmd = cmd::kSetting, .hasSub = true, .sub = settingSub::kMenu,
+                            .data = {0x00, 0x73, 0x01}});
+        check(Access::issued(b).empty(), "the IC-705 SET reply cannot advance the MK2 preflight");
+        Access::deliver(b, {.cmd = cmd::kSetting, .hasSub = true, .sub = settingSub::kMenu,
+                            .data = {0x01, 0x09, static_cast<std::uint8_t>(standbyAllowed)}});
+        if (standbyAllowed) {
+            const auto issued = Access::issued(b);
+            check(issued.size() == 1 && issued.front().cmd == cmd::kControl
+                      && issued.front().sub == control::kPtt && issued.front().data.empty(),
+                  "Standby/Shutdown sends a directed PTT read before any power write");
+            Access::deliver(b, {.cmd = cmd::kControl, .hasSub = true, .sub = control::kPtt,
+                                .data = {0x00}}, 1, kBroadcastAddress);
+            check(Access::issued(b).size() == 1, "an unsolicited RX report cannot authorize standby");
+            if (radioTransmits) {
+                Access::deliver(b, {.cmd = cmd::kControl, .hasSub = true, .sub = control::kPtt,
+                                    .data = {0x01}}, 1, kBroadcastAddress);
+            } else {
+                // The preflight is still waiting for the directed PTT reply.
+                b.disconnectRadio();
+            }
+        }
+        QCoreApplication::processEvents();
+        check(disconnected.count() == 1, "a skipped standby completes ordinary disconnect exactly once");
+        const auto issued = Access::issued(b);
+        check(std::none_of(issued.begin(), issued.end(), [](const CivFrame& frame) {
+            return frame.cmd == cmd::kPower;
+        }), "shutdown-only, TX and unconfirmed receive state do not send power-off");
+    };
+    runPreflight(false, false);
+    runPreflight(true, true);
+    runPreflight(true, false);
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("icom-backend-seam-test"));
@@ -2336,6 +2402,7 @@ int main(int argc, char** argv)
     qRegisterMetaType<MeterDef>("MeterDef");
 
     testStaleGenerationDropped();
+    testStandbyDisconnectGuards();
     testSwrMinimumHold();
     testIc705PreampFrequencyRanges();
     testRangePreampReadPrecedesQueuedMeters();

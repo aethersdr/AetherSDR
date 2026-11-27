@@ -22,7 +22,7 @@ public:
     static QString username();
     static void setUsername(const QString& username);
 
-    // Client-owned, opt-in connection policy, stored in the Icom document.
+    // Single client opt-in for automatic network wake and standby.
     static bool wakeOnConnect();
     static void setWakeOnConnect(bool enabled);
 

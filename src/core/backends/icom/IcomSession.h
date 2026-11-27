@@ -80,6 +80,7 @@ public:
     Q_INVOKABLE void stop();
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
+    [[nodiscard]] bool ownsCivStream() const noexcept;
     [[nodiscard]] std::uint8_t advertisedCivAddress() const noexcept { return m_advertisedCivAddress; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
     [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
