@@ -66,6 +66,25 @@ static void testFraming()
               && parsedRxAnt->data == std::vector<std::uint8_t>{0x01},
           "RX-ANT reply keeps subcommand separate from value");
 
+    check(bytesAre(cmdReadReceiverAntenna(0xB2, 0),
+                   {0xFE, 0xFE, 0xB2, 0xE0, 0x29, 0x00, 0x12, 0xFD}),
+          "flagship MAIN antenna read carries no port");
+    for (std::uint8_t receiver : {0, 1}) {
+        for (std::uint8_t port : {0, 1, 2, 3}) {
+            for (bool rx : {false, true}) {
+                const AntennaSelection selection{port, rx};
+                const auto wire = cmdSetReceiverAntenna(0xB2, receiver, selection);
+                const auto frame = parseFrame(wire);
+                check(frame && frame->sub == receiver && decodeReceiverAntenna(*frame) == selection,
+                      "flagship antenna payload round trips for both receivers and every port");
+            }
+        }
+    }
+    const auto subAnt4 = cmdSetReceiverAntenna(0xB2, 1, {3, true});
+    check(bytesAre(subAnt4,
+                   {0xFE, 0xFE, 0xB2, 0xE0, 0x29, 0x01, 0x12, 0x03, 0x01, 0xFD}),
+          "IC-7760 SUB ANT4 with RX-ANT has an independent port and flag");
+
     // FB / FA acknowledgements.
     auto ok = parseFrame(std::vector<std::uint8_t>{0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD});
     check(ok.has_value() && ok->isOk(), "FB is an acknowledgement");

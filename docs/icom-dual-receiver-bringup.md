@@ -168,6 +168,7 @@ were checked, not that this app was tested on that hardware.
 | Frequency | `25 rr` reads/writes absolute MAIN/SUB. A selected-band transceive push prompts addressed reconciliation; it cannot overwrite an arbitrary receiver cache. |
 | Mode | `26 rr` retains base mode, DATA OFF/D1/D2/D3 and FIL1/FIL2/FIL3. Writes carry all fields and use an addressed readback. The existing neutral mode vocabulary collapses the DATA variant in the displayed label; the backend retains the actual enum. |
 | Other receiver controls | Only explicitly supported command families use `29 rr`. Shared PTT, split, modulation menus and scope commands are not wrapped. Generic ACK/NG is serialized by the existing scheduler. MAIN and SUB use separate semantic generations. |
+| Antenna routing | A receiver-addressed `12` read confirms the selected connector and RX-ANT state. The IC-7610 has two ports and the IC-7760 and IC-7851 have four. The backend reads the model's connector configuration, checks receive status before switching, and follows confirmed split for the transmit port. |
 | Scope | Two independent decoders, 689 amplitudes each, documented 0–200 range. Each normal Ethernet sweep has 704 data bytes after `27 00`, including 15 metadata bytes. Truncated/oversized traces and invalid selectors are rejected. Out-of-range clears only its receiver. |
 | Frequency axes | Center mode is center ± half-span. Fixed and scroll modes report actual lower/upper edges. Bytes already run from low to high RF; there is no IQ conjugation or FFT half-rotation. RadioModel derives spectrum and waterfall from the same bins and geometry. |
 | Zoom | Center mode snaps to the eight native spans, 5 kHz–1 MHz total width. Fixed/Scroll-F drag and zoom use kHz-rounded edge windows. Each receiver borrows a slot not selected/reserved by the other scope, saves the range/slot preset before writing, and restores saved presets/selections during normal disconnect. |
@@ -190,7 +191,8 @@ session: no radio sockets, synthetic radio service, or physical transmitter.
 It exercises all three profiles at a custom address, both scope IDs and full native
 bin counts/positions, independent axes, out-of-range and malformed frames,
 foreign/stale deliveries, reordered MAIN/SUB state, DATA enums, split/focus,
-receiver-qualified confirmations, stereo decoder feeds and the speaker mix.
+receiver-qualified confirmations, per-model antenna options, queued antenna
+switch refusal on PTT, stereo decoder feeds and the speaker mix.
 `icom_audio_test` checks byte/frame boundaries across stereo packets and channel
 counts for loss concealment. Existing Icom tests protect the previous models.
 
@@ -200,8 +202,8 @@ IC-7760 transmit is enabled from the CI-V guide on the shared IC-7610 TX path,
 as approved by the maintainer. It is not yet confirmed on hardware. The
 IC-7851 receive and TX-selection evidence below does not qualify RF transmit
 on these models. IC-7610 displacement reports #5714, #5341, #5154, #5096 and
-#5084 still need IC-7610 hardware confirmation. #6920 also requests diversity
-and all four antenna ports, which this implementation does not add.
+#5084 still need IC-7610 hardware confirmation. The antenna work from
+#6920 is tracked in #7382. Diversity remains open.
 
 Before testing, check the radio owner/busy state and the local test lock. Do not
 connect over another operator's session. Record model, firmware, connection
@@ -229,10 +231,20 @@ Archive the bridge snapshots, received CI-V trace, audio markers, screenshots
 and the independent RF observation. Do not describe the devices as qualified or
 close #6871/#6872 from offline tests alone.
 
+### IC-7851 antenna routing on hardware
+
+The November 27, 2026 agent automation bridge run selected ANT2, ANT3, and
+ANT4 from ANT1 independently on MAIN and SUB. Each change produced a tagged
+CI-V readback and updated the matching VFO card. The other receiver kept its
+confirmed selection. Both returned to ANT1 and the original Dualwatch state
+before disconnect. PTT stayed off. The RX-ANT overlay and transmit picker are
+covered by injected frames. IC-7610 and IC-7760 antenna routing follows their
+CI-V guides and has offline coverage.
+
 ## Deferred work and core transport risks
 
-Receiver-specific DSP, true user-programmed filter widths/PBT, all antenna
-combinations, meter calibration, PSK labels, CW text, memories, DPD/inhibit UI,
+Receiver-specific DSP, true user-programmed filter widths/PBT, RX-I/O switching,
+meter calibration, PSK labels, CW text, memories, DPD/inhibit UI,
 firmware-specific extensions and LAN IF demodulation are outside this initial
 bring-up. This Ethernet path supplies amplitude traces and AF, not wideband IQ.
 The radio's own TX inhibit/interlocks remain authoritative; the app does not

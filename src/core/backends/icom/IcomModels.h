@@ -293,6 +293,7 @@ enum class IcomFeature : std::uint8_t {
     MemoryChannels,
     AntennaTuner,
     SelectedBandDualwatch,
+    AntennaRouting,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -358,6 +359,15 @@ struct CwTextKeyerProfile {
 struct RxAntennaProfile {
     bool selectable = false;
     bool readbackAvailable = false;
+};
+
+// Command 29 <receiver> 12 <port> <RX-ANT flag>. A negative SET item
+// denotes a fixed connector. An RX-only ANT4 is selected with the flag.
+struct AntennaRoutingProfile {
+    std::uint8_t portCount;
+    std::array<int, 3> connectorItems;
+    int rxConnectorItem = -1;
+    bool ant4ReceiveOnlyOption = false;
 };
 
 // Model-specific GPS and clock command shape. SET-menu item numbers are not
@@ -466,6 +476,7 @@ struct IcomModelProfile {
     std::optional<FmRepeaterProfile> fmRepeater{};
     std::optional<CwTextKeyerProfile> cwTextKeyer{};
     std::optional<RxAntennaProfile> rxAntenna{};
+    std::optional<AntennaRoutingProfile> antennaRouting{};
     std::optional<GpsProfile> gps{};
     SetMenuProfile setMenu{};
     ScopeCommandProfile scope{};

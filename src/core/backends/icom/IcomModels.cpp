@@ -256,7 +256,7 @@ constexpr std::array<FeatureEvidence, 4> kIc7110Evidence{{
      "IC-7110 A7894-4J: 16 59 reads or sets Dualwatch"},
 }};
 
-constexpr std::array<FeatureEvidence, 5> kDualReceiverEvidence{{
+constexpr std::array<FeatureEvidence, 6> kDualReceiverEvidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuide,
      "IC-7610 A7380-7EX-4; IC-7760 A7788-8EX-2, 25/26/29 and 1C 00/03"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -267,10 +267,12 @@ constexpr std::array<FeatureEvidence, 5> kDualReceiverEvidence{{
      "IC-7610 SET 0090-0094; IC-7760 SET 0128-0132"},
     {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
      "IC-7610 and IC-7760 model CI-V guides, 1C 01"},
+    {IcomFeature::AntennaRouting, EvidenceKind::OfficialGuide,
+     "IC-7610 A7380-7EX-4 and IC-7760 A7788-8EX-2, commands 12/29 and antenna TYPE SET"},
 }};
 constexpr std::array<std::string_view, 9> kDualReceiverModes{
     "LSB", "USB", "CW", "CWR", "AM", "FM", "DIGL", "DIGU", "DFM"};
-constexpr std::array<FeatureEvidence, 5> kIc785xEvidence{{
+constexpr std::array<FeatureEvidence, 6> kIc785xEvidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuide,
      "IC-7850/7851 instruction manual edition 3, 25/26/29 and 1C 00/03"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -281,6 +283,8 @@ constexpr std::array<FeatureEvidence, 5> kIc785xEvidence{{
      "IC-7850/7851 SET 0062-0066; LAN output 0056"},
     {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
      "IC-7850/7851 instruction manual, 1C 01"},
+    {IcomFeature::AntennaRouting, EvidenceKind::OfficialGuide,
+     "IC-7850/7851 instruction manual edition 3, commands 12/29 and SET 0306-0308"},
 }};
 constexpr std::array<ModulationInputChoice, 6> kIc7610LanChoice{{
     {0x00, "MIC", ModSourceMic}, {0x01, "ACC", ModSourceAccessory},
@@ -828,6 +832,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .features = kDualReceiverEvidence,
         .modulation = ModulationProfile{-1, -1, 90, 91, 92, 0x05, 0, kIc7610LanChoice},
         .dualReceiver = DualReceiverProfile{86, {92, 93, 94}},
+        .antennaRouting = AntennaRoutingProfile{2, {-1, -1, -1}, 275},
         .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
@@ -837,6 +842,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .features = kDualReceiverEvidence,
         .modulation = ModulationProfile{-1, -1, 128, 129, 130, 0x09, 0, kIc7760LanChoice},
         .dualReceiver = DualReceiverProfile{123, {130, 131, 132}},
+        .antennaRouting = AntennaRoutingProfile{4, {344, 345, 346}, 347},
         .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
@@ -848,6 +854,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // Relative slope measured on the lab IC-7851: 0.72 dB/display unit.
         // The absolute dBm floor remains estimated; no RF calibration claim.
         .dualReceiver = DualReceiverProfile{56, {64, 65, 66}, 144.0, -20.0, 20.0, false},
+        .antennaRouting = AntennaRoutingProfile{4, {306, 307, 308}, -1, true},
         .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
@@ -901,6 +908,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::TxBandwidth:         return "tx-bandwidth";
     case IcomFeature::CwTextKeyer:         return "cw-text-keyer";
     case IcomFeature::RxAntenna:           return "rx-antenna";
+    case IcomFeature::AntennaRouting:      return "antenna-routing";
     case IcomFeature::FmRepeaterBasic:     return "fm-repeater-basic";
     case IcomFeature::FmRepeaterExtended:  return "fm-repeater-extended";
     case IcomFeature::FmRepeaterExtendedReadback:

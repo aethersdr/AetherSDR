@@ -127,6 +127,13 @@ struct IcomCivBackendTestAccess {
         if (overdue) { b.m_lanOutputReadStartedAt = b.nowMs() - b.kLanOutputReadTimeoutMs; }
         b.pollDualReceivers();
     }
+    static void holdAntennaWrite(IcomCivBackend& b)
+    {
+        clearCommands(b);
+        const auto read = cmdReadReceiverAntenna(b.m_session->civAddress(), 0);
+        b.queueRead(read, b.semanticKey(read), IcomCivScheduler::Priority::Control);
+        b.pumpCiv(b.nowMs());
+    }
     static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
     // Borrow Dualwatch so restoration has a readback to wait for, then lose the
     // transport while the bounded wait is running.
@@ -228,11 +235,125 @@ std::vector<std::uint8_t> makeScope(int receiver, int mode, std::uint64_t a,
     return body;
 }
 
+void testAntennas(std::uint8_t model)
+{
+    using Access = IcomCivBackendTestAccess;
+    RadioModel radio;
+    if (!radio.rebuildBackendForTest(QStringLiteral("icom"))) {
+        check(false, "Icom antenna test backend builds");
+        return;
+    }
+    auto& backend = static_cast<IcomCivBackend&>(*radio.backend());
+    Access::prepare(backend, model);
+    check(backend.createPanadapter(), "antenna test opens SUB");
+    Access::inject(backend, {0x07, 0xc2, 1});
+    Access::inject(backend, {0x27, 0x14, 1, 3});
+    Access::inject(backend, {0x0f, 0});
+    Access::inject(backend, {0x1c, 0, 0});
+    const bool twoPorts = model == 0x98;
+    const bool rxOnlyAnt4 = model == 0x8e;
+    const std::uint8_t upper = twoPorts ? 1 : 3;
+    if (twoPorts) {
+        Access::inject(backend, {0x1a, 0x05, 0x02, 0x75, 0});
+    } else if (rxOnlyAnt4) {
+        for (std::uint8_t item : {0x06, 0x07, 0x08}) {
+            Access::inject(backend, {0x1a, 0x05, 0x03, item, 1});
+        }
+    } else {
+        for (std::uint8_t item : {0x44, 0x45, 0x46, 0x47}) {
+            Access::inject(backend, {0x1a, 0x05, 0x03, item, static_cast<std::uint8_t>(item != 0x47)});
+        }
+    }
+    auto* main = radio.slice(0);
+    auto* sub = radio.slice(1);
+    if (!main || !sub) { check(false, "both antenna models exist"); return; }
+
+    Access::inject(backend, {0x29, 0, 0x12, 0, 0});
+    Access::inject(backend, {0x29, 1, 0x12, upper, 0});
+    const QString lastPort = QStringLiteral("ANT%1").arg(upper + 1);
+    check(main->rxAntenna() == "ANT1" && sub->rxAntenna() == lastPort,
+          "MAIN and SUB adopt independent radio antenna replies");
+    check(main->txAntenna() == "ANT1" && main->txAntennaList().size() == upper + 1
+          && sub->txAntennaList().isEmpty(), "TX follows the confirmed split receiver");
+    check(main->rxAntennaList().size() == upper + (rxOnlyAnt4 ? 1 : 2)
+          && main->rxAntennaList().contains(lastPort), "profile publishes its enabled connectors");
+
+    Access::inject(backend, {0x29, 0, 0x12, static_cast<std::uint8_t>(upper + 1), 0});
+    Access::inject(backend, {0x29, 0, 0x12, 0, 2});
+    Access::inject(backend, {0x29, 0, 0x12, 0});
+    Access::inject(backend, {0x29, 0, 0x12, upper, 0}, 6);
+    Access::inject(backend, {0x29, 0, 0x12, upper, 0}, 7, 0x51);
+    check(main->rxAntenna() == "ANT1", "malformed, foreign and stale-session replies preserve antenna state");
+
+    Access::clearCommands(backend);
+    sub->setRxAntenna(QStringLiteral("ANT1"));
+    check(sub->rxAntenna() == lastPort, "operator selection waits for radio readback");
+    check(Access::sent(backend, cmdSetReceiverAntenna(0x50, 1, {0, false})),
+          "SUB picker writes to SUB at the resolved address");
+    Access::inject(backend, {0xfa});
+    check(sub->rxAntenna() == lastPort, "NG keeps the previous antenna");
+    Access::inject(backend, {0x29, 1, 0x12, 0, 0});
+    check(sub->rxAntenna() == "ANT1" && main->rxAntenna() == "ANT1",
+          "SUB readback changes only SUB");
+
+    const auto write = cmdSetReceiverAntenna(0x50, 1, {upper, false});
+    const auto read = cmdReadReceiverAntenna(0x50, 1);
+    check(Access::confirmation(backend, write) == read && Access::key(backend, write) == Access::key(backend, read)
+          && Access::key(backend, read) != Access::key(backend, cmdReadReceiverAntenna(0x50, 0)),
+          "confirmation reads the selected port and has a receiver-specific generation");
+
+    Access::holdAntennaWrite(backend);
+    check(backend.requestSliceRxAntenna(1, lastPort) == ReceiveDispatch::Dispatched,
+          "valid change queues behind a read");
+    Access::inject(backend, {0x1c, 0, 1});
+    Access::inject(backend, {0x29, 0, 0x12, 0, 0});
+    Access::pump(backend);
+    check(!Access::sent(backend, write)
+          && backend.requestSliceRxAntenna(1, lastPort) == ReceiveDispatch::Unsupported,
+          "PTT readback drops queued changes and refuses new ones");
+    Access::inject(backend, {0x1c, 0, 0});
+    Access::inject(backend, {0x0f, 1});
+    Access::clearCommands(backend);
+    sub->setTxAntenna(lastPort);
+    check(Access::sent(backend, write) && sub->txAntenna() == "ANT1",
+          "TX picker changes the confirmed split receiver through the same readback path");
+    Access::inject(backend, {0xfb});
+    Access::inject(backend, {0x29, 1, 0x12, upper, 0});
+    check(sub->txAntenna() == lastPort && main->txAntennaList().isEmpty(),
+          "TX port is projected from the selected receiver's confirmed port");
+
+    if (rxOnlyAnt4) {
+        Access::inject(backend, {0x29, 1, 0x12, 3, 1});
+        check(sub->rxAntenna() == "ANT4", "IC-7851 rejects ANT4 with RX-ANT flag");
+        Access::inject(backend, {0x1a, 0x05, 0x03, 0x08, 2});
+        Access::inject(backend, {0x29, 1, 0x12, 2, 1});
+        check(!sub->txAntennaList().contains("ANT4") && sub->rxAntennaList().contains("RX-ANT")
+              && sub->rxAntenna() == "RX-ANT" && sub->txAntenna() == "ANT3",
+              "IC-7851 RX-only ANT4 preserves the underlying TX connector");
+    } else {
+        Access::inject(backend, {0x29, 1, 0x12, upper, 1});
+        check(sub->rxAntenna() == "RX-ANT" && sub->txAntenna() == lastPort,
+              "RX-ANT overlay keeps the underlying port");
+        const std::vector<std::uint8_t> connector = twoPorts
+            ? std::vector<std::uint8_t>{0x1a, 0x05, 0x02, 0x75, 1}
+            : std::vector<std::uint8_t>{0x1a, 0x05, 0x03, 0x47, 1};
+        Access::inject(backend, connector);
+        check(!sub->rxAntennaList().contains("RX-ANT"), "external-device mode suppresses RX-ANT selection");
+    }
+    if (!twoPorts) {
+        const auto item = static_cast<std::uint8_t>(rxOnlyAnt4 ? 0x06 : 0x44);
+        Access::inject(backend, {0x1a, 0x05, 0x03, item, 0});
+        check(!sub->txAntennaList().contains("ANT2") && !sub->rxAntennaList().contains("ANT2"),
+              "disabled connector is withdrawn from both pickers");
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     TestSettingsProfile settings(QStringLiteral("icom-dual-receiver"));
     if (!settings.isValid()) { return 1; }
+    for (std::uint8_t model : {0x98, 0xb2, 0x8e}) { testAntennas(model); }
     for (std::uint8_t model : {0x98, 0xb2, 0x8e}) {
         IcomCivBackend backend;
         QStringList warnings;

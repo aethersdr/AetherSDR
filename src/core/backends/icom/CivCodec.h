@@ -179,7 +179,8 @@ inline constexpr std::uint8_t kScope        = 0x27;
 // (20 dB, HF and 50 MHz only); other models publish other steps, which is
 // why the backend advertises the positions rather than assuming them.
 inline constexpr std::uint8_t kAttenuator  = 0x11;
-// IC-7300MK2 receive-only antenna switch: sub 00, 00=main antenna, 01=RX-ANT.
+// Antenna selection. The IC-7300MK2 uses port 00 and an RX-ANT flag.
+// The IC-7610, IC-7760 and IC-785x address this command per receiver with 29.
 inline constexpr std::uint8_t kRxAntenna   = 0x12;
 // RIT / dTX. Icom calls transmit incremental tuning "dTX"; the operator-facing
 // name everywhere else is XIT, and they are the same control.
@@ -615,6 +616,18 @@ struct PassbandEdges {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
+
+struct AntennaSelection {
+    std::uint8_t port;   // Zero-based CI-V port.
+    bool rxAntenna;
+    bool operator==(const AntennaSelection&) const = default;
+};
+[[nodiscard]] std::vector<std::uint8_t> cmdReadReceiverAntenna(std::uint8_t to, std::uint8_t receiver);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetReceiverAntenna(std::uint8_t to, std::uint8_t receiver,
+                                                              AntennaSelection selection);
+[[nodiscard]] bool isReceiverAntennaCommand(const CivFrame& frame);
+[[nodiscard]] std::optional<AntennaSelection> decodeReceiverAntenna(const CivFrame& frame);
+
 enum class RepeaterOffsetDirection : std::uint8_t {
     Simplex = 0x10,
     Down = 0x11,

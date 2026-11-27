@@ -1668,6 +1668,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("inCapture"),  s->inCapture()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
+        {QStringLiteral("rxAntennaList"), QJsonArray::fromStringList(s->rxAntennaList())},
+        {QStringLiteral("txAntennaList"), QJsonArray::fromStringList(s->txAntennaList())},
         {QStringLiteral("txAntenna"),  s->txAntenna()},   // live TX antenna — lets a driver enforce the dummy-load gate before keying (#3646)
         {QStringLiteral("rfGain"),     s->rfGain()},
         {QStringLiteral("audioGain"),  s->audioGain()},

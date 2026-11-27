@@ -1103,6 +1103,10 @@ void IcomCivBackend::disconnectRadio()
     m_rxResampler.reset();
     m_scope.reset();
     m_receivers = {};
+    m_antennaConnectorModes = {1, -1, -1, -1};
+    m_rxAntennaConnectorMode = -1;
+    m_lastDualAntennaPoll.reset();
+    m_lastAntennaSettingsPoll.reset();
     m_dualInitialized = false;
     m_dualPanOpening = m_dualPanClosing = m_dualWatchOwned = m_dualPanHasOpened = false;
     m_dualMainMonitorPan = 0;
@@ -2911,11 +2915,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
         // A window placed for the refused tune must not stay on screen either.
         resetScopeEdgeState();
     }
-    if (!identityReply && !scopeSourceReply) {
-        pumpCiv(frameAtMs);
-    }
     const bool isPttState = frame.cmd == cmd::kControl && frame.hasSub
         && frame.sub == control::kPtt && !frame.data.empty();
+    // Adopt a PTT report before another queued control can reach the radio.
+    const auto pumpAfterPttState = qScopeGuard([this, isPttState, frameAtMs] {
+        if (isPttState) { pumpCiv(frameAtMs); }
+    });
+    if (!identityReply && !scopeSourceReply && !isPttState) {
+        pumpCiv(frameAtMs);
+    }
     if (observation == IcomCivScheduler::Observation::Stale && !isPttState) {
         qCWarning(lcIcomScheduler)
             << "suppressed stale CI-V completion" << frame.cmd << frame.sub;
@@ -4626,6 +4634,9 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
     if (!parsed) {
         return {};
     }
+    if (hasDualReceivers() && isReceiverAntennaCommand(*parsed)) {
+        return "receiver." + std::to_string(parsed->sub) + ".antenna";
+    }
     if (hasDualReceivers() && parsed->hasSub
         && (parsed->cmd == 0x25 || parsed->cmd == 0x26 || parsed->cmd == 0x29)) {
         std::string key = "receiver." + std::to_string(parsed->sub)
@@ -4723,6 +4734,10 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         }
         if (parsed->cmd == 0x25 || parsed->cmd == 0x26) {
             return buildFrameSub(addr, parsed->cmd, parsed->sub);
+        }
+        if (isReceiverAntennaCommand(*parsed)) {
+            return decodeReceiverAntenna(*parsed)
+                ? std::optional(cmdReadReceiverAntenna(addr, parsed->sub)) : std::nullopt;
         }
         if (parsed->cmd == 0x29 && parsed->data.size() >= 2) {
             return buildFrameSub(addr, 0x29, parsed->sub,
@@ -4876,6 +4891,11 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
     if (!m_session || !m_connected) {
         serviceSchedulerWaiters(nowMs);
         return;
+    }
+    if (profileFor(*m_model).antennaRouting && !antennaWritesAllowed(nowMs)) {
+        m_civScheduler.invalidateMatching([](const IcomCivScheduler::Request& request) {
+            return request.acceptsGenericReply && request.key.ends_with(".antenna");
+        });
     }
     const std::optional<IcomCivScheduler::Dispatch> dispatch = m_civScheduler.takeNext(nowMs);
     if (!dispatch) {
@@ -5979,6 +5999,10 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
 ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceControlRequest& request)
 {
     using Field = SliceControlRequest::Field;
+    if (m_model && profileFor(*m_model).antennaRouting
+        && request.field == Field::TxAntenna && request.valid()) {
+        return requestDualAntenna(sliceId, std::get<QString>(request.value), true);
+    }
     if (hasDualReceivers() && request.valid() && sliceId >= 0 && sliceId < 2) {
         if (request.field == Field::ActiveSlice) {
             setActiveSlice(sliceId);
@@ -6220,6 +6244,9 @@ ReceiveDispatch IcomCivBackend::requestSliceSquelch(int sliceId, const SliceSque
 
 ReceiveDispatch IcomCivBackend::requestSliceRxAntenna(int sliceId, const QString& antenna)
 {
+    if (m_model && profileFor(*m_model).antennaRouting) {
+        return requestDualAntenna(sliceId, antenna, false);
+    }
     if (!m_connected || !m_session || sliceId != 0 || !m_model || !profileFor(*m_model).rxAntenna
         || !profileFor(*m_model).rxAntenna->selectable
         || (antenna.compare(QLatin1String("ANT1"), Qt::CaseInsensitive) != 0
