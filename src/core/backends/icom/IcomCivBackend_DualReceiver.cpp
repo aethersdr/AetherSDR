@@ -241,12 +241,14 @@ void IcomCivBackend::initializeDualReceivers()
 void IcomCivBackend::pollDualReceivers()
 {
     if (!m_session || !m_connected || m_dualRestoring) { return; }
-    const qint64 now = nowMs();
-    if (!m_lanOutputReadStartedAt) { m_lanOutputReadStartedAt = now; }
     const std::uint8_t address = m_session->civAddress();
     const auto read = [this](const std::vector<std::uint8_t>& frame) {
         queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
     };
+    const auto lanOutputRead = cmdReadSetting(address, profileFor(*m_model).dualReceiver->lanOutputItem);
+    // Receive audio depends on this read. Give it the first control slot at
+    // startup, then reconcile it in the ordinary polling order once known.
+    if (m_lanOutput < 0) { read(lanOutputRead); }
     for (std::uint8_t receiver : {0, 1}) {
         read(buildFrameSub(address, 0x25, receiver));
         read(buildFrameSub(address, 0x26, receiver));
@@ -261,7 +263,7 @@ void IcomCivBackend::pollDualReceivers()
     read(buildFrameSub(address, cmd::kVfoControl, 0xc2));
     read(cmdReadTransmitFrequency(address));
     read(buildFrameSub(address, cmd::kControl, control::kPtt));
-    read(cmdReadSetting(address, profileFor(*m_model).dualReceiver->lanOutputItem));
+    if (m_lanOutput >= 0) { read(lanOutputRead); }
     if (const auto mod = currentModulationProfile()) {
         for (int item : {mod->dataOffInputItem, mod->dataInputItem, mod->networkLevelItem}) {
             read(cmdReadSetting(address, item));
@@ -271,7 +273,8 @@ void IcomCivBackend::pollDualReceivers()
         const auto frame = cmdReadSetting(address, item);
         queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Maintenance);
     }
-    pumpCiv(nowMs());
+    const qint64 now = nowMs();
+    pumpCiv(now);
     if (m_connected && m_lanOutputReadStartedAt && m_lanOutput < 0 && !m_lanOutputUnknownWarned
         && now - *m_lanOutputReadStartedAt >= kLanOutputReadTimeoutMs) {
         m_lanOutputUnknownWarned = true;

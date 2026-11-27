@@ -4816,6 +4816,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
         request.replySub = 0;
     }
     if (parsed->cmd == 0x29 || parsed->cmd == cmd::kScope
+        || (hasDualReceivers() && parsed->cmd == cmd::kSetting && parsed->sub == settingSub::kMenu)
         || (hasSelectedBandDualwatch() && parsed->cmd == cmd::kSetting)) {
         replyDataPrefix = parsed->data;
     }
@@ -4910,6 +4911,10 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
         m_lastOutboundCiv = hex.trimmed();
         m_lastOutboundCivKey = QString::fromStdString(dispatch->key);
         m_lastOutboundCivAtMs = nowMs;
+    }
+    if (!m_lanOutputReadStartedAt && m_lanOutput < 0 && hasDualReceivers()
+        && dispatch->frame == cmdReadSetting(m_session->civAddress(), profileFor(*m_model).dualReceiver->lanOutputItem)) {
+        m_lanOutputReadStartedAt = nowMs;
     }
     m_session->sendCiv(dispatch->frame, dispatch->txCommand);
     if (dispatch->key == "scope.edgewin") {

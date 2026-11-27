@@ -199,12 +199,13 @@ version or distinguish IC-7850 from IC-7851. The connected tab and status bar
 use the identified model after the CI-V reply arrives.
 
 Select **AF** under the radio's **LAN AF/IF Output** menu for PC listening.
-An IF selection is reported and receive audio is withheld. If the AF/IF read
-remains unanswered for five seconds, AetherSDR warns that PC receive audio is
-withheld until AF is confirmed. Check the radio menu and CI-V connection; a
-later AF reply resumes audio without reconnecting. Stereo LAN receive
-audio is split into separate decoder feeds and a speaker mix; per-slice gain,
-mute and balance adjust the local monitor. MAIN-left/SUB-right channel identity
+AetherSDR requests this setting early in startup and waits for AF before playing
+audio. It reports a confirmed IF selection immediately. If the setting is still
+unknown five seconds after AetherSDR sends the query, it warns once. Check the
+radio menu and CI-V connection. A later AF reply resumes audio without reconnecting.
+
+Stereo LAN receive audio is split into separate decoder feeds and a speaker mix.
+Per-slice gain, mute and balance adjust the local monitor. MAIN-left/SUB-right channel identity
 is verified on the lab IC-7851; it is an initial implementation assumption on
 the IC-7610 and IC-7760.
 The shared stereo playback queue prefills 200 ms and uses a 400 ms buffer cap
