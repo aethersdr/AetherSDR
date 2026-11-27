@@ -291,12 +291,14 @@ void IcomCivBackend::requestDualPassband(int receiver)
         return;
     }
     // Panel width and PBT changes need reconciliation even when the slot stays selected.
+    const auto priority = state.nextPassbandReadMs == 0 ? IcomCivScheduler::Priority::Operator
+                                                       : IcomCivScheduler::Priority::Maintenance;
     state.nextPassbandReadMs = nowMs() + 1500;
     const auto address = m_session->civAddress();
     for (const auto& command : {cmdReadFilterWidth(address), cmdReadLevel(address, level::kPbtInner),
                                 cmdReadLevel(address, level::kPbtOuter)}) {
         const auto wire = receiverCommand(command, receiver);
-        queueRead(wire, semanticKey(wire), IcomCivScheduler::Priority::Maintenance);
+        queueRead(wire, semanticKey(wire), priority);
     }
 }
 
@@ -549,7 +551,9 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (contextChanged) {
             invalidateDualPassband(frame.sub);
             if (modeChanged) { state.slotWidths = {}; }
-            state.widthHz = 0;
+            // Recalling a previously visited slot can display its radio-reported
+            // width immediately while the new addressed read reconciles it.
+            state.widthHz = state.slotWidths[frame.data[2] - 1];
             state.pbtInner = state.pbtOuter = kPbtCentreCode;
             state.nextPassbandReadMs = 0;
         }
