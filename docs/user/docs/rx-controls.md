@@ -59,7 +59,9 @@ those instead. On the IC-7610, IC-7760 and IC-7851, FIL1 through FIL3 select
 the radio’s saved slots for the addressed receiver. Drag the passband edges to
 edit the selected slot. Switching slots recalls the saved width. FM has fixed
 widths. The VFO controls follow their own receiver, and the RX applet follows
-the active receiver.
+the active receiver. On the IC-7851, when both receivers use USB with DATA off
+and the same FIL slot, editing its width changes what both receive. Selecting
+different FIL slots lets you use different widths.
 
 #### Adaptive RX filter (USB/LSB)
 

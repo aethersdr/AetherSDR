@@ -58,6 +58,13 @@ Filter edits and readbacks target `29 00` (MAIN) or `29 01` (SUB) with IF width
 `1A 03` and Twin PBT `14 07/08`. A slot selection only requests the slot.
 Width and PBT readbacks supply that receiver’s passband.
 
+On the lab IC-7851, MAIN in USB-D1 and SUB in USB recalled separate widths
+across FIL1, FIL2 and FIL3. With both receivers in USB, DATA off and FIL2,
+an addressed MAIN edit from 3400 to 2200 Hz returned 2200 Hz on both addressed
+reads. Restoring 3400 Hz restored both. Receiver addressing selects the control
+target; the radio determines which saved filter memory the two receivers use.
+This shared-memory observation applies to the tested IC-7851.
+
 ## IC-7851 lab learnings
 
 Authority: the operator's Icom oracle §§13.15–13.16 and §14, the retained
