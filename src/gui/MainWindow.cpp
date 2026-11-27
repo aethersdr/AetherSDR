@@ -6663,14 +6663,20 @@ void MainWindow::buildUI()
     hbox->addWidget(m_pgxlContainer);
 
     // KPA500 main-window indicator — RFC #7092.
-    // Passive widget (no click / no aetherStateCycle): show/hide on detectedChanged only.
+    // Clickable: left click cycles OPERATE↔STANDBY and clears FAULT (#7549).
+    // Show/hide on detectedChanged only (not on radio-disconnect teardown).
     m_kpa500Separator = addSep();
     m_kpa500Separator->setVisible(false);
 
     m_kpa500Container = new QWidget;
     m_kpa500Container->setObjectName(QStringLiteral("kpa500Indicator"));
+    m_kpa500Container->setCursor(Qt::PointingHandCursor);
     m_kpa500Container->setToolTip("Elecraft KPA500");
     m_kpa500Container->setAccessibleName("KPA500: Unknown");
+    m_kpa500Container->setProperty("aetherStateCycle",
+        QStringLiteral("Press to toggle OPERATE/STANDBY or clear fault"));
+    m_kpa500Container->installEventFilter(this);
+    keyboardOperable(m_kpa500Container);
     m_kpa500Container->setVisible(false);
     {
         auto* vbox = new QVBoxLayout(m_kpa500Container);

@@ -4,6 +4,7 @@
 // interception), handleCwMomentaryShortcut() and keyPress/keyRelease overrides.
 
 #include "MainWindow.h"
+#include "Kpa500IndicatorState.h"
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
@@ -1107,8 +1108,8 @@ bool MainWindow::isStatusIndicator(const QObject* obj) const
 #endif
     return obj == m_cwxIndicator || obj == m_tnfIndicator
         || obj == m_fdxIndicator || obj == m_bandStackIndicator || obj == m_tgxlContainer
-        || obj == m_pgxlContainer || obj == m_txIndicator || obj == m_addPanLabel
-        || obj == m_dvkIndicator || obj == m_radioVersionLabel;
+        || obj == m_pgxlContainer || obj == m_kpa500Container || obj == m_txIndicator
+        || obj == m_addPanLabel || obj == m_dvkIndicator || obj == m_radioVersionLabel;
 }
 
 void MainWindow::activateStatusIndicator(QObject* obj)
@@ -1176,6 +1177,22 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     if (obj == m_pgxlContainer) {
         // Simple toggle: OPERATE ↔ STANDBY (PGXL has no BYPASS)
         m_radioModel.amplifier().setOperate(!m_radioModel.amplifier().operate());
+        return;
+    }
+    if (obj == m_kpa500Container) {
+        // OPERATE → STANDBY, STANDBY → OPERATE, FAULT → clearFault. (#7549)
+        // TX is interlocked; OFF and "–" are not in the click cycle.
+        const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
+        const auto [label, token] = kpa500IndicatorState(
+            m_kpa500Conn.lastStatus(), live, m_kpa500Conn.hasLiveTxMeters());
+        if (label == QStringLiteral("OPERATE")) {
+            m_kpa500Conn.setOperate(false);
+        } else if (label == QStringLiteral("STANDBY")) {
+            m_kpa500Conn.setOperate(true);
+        } else if (label == QStringLiteral("FAULT")) {
+            m_kpa500Conn.clearFault();
+        }
+        // TX: RF live — click silently ignored. OFF: not in cycle. "–": not responding.
         return;
     }
     if (obj == m_txIndicator) {
