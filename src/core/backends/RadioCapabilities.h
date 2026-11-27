@@ -988,6 +988,12 @@ struct RadioCapabilities {
     // preset selects a mutable hardware slot. Empty preserves the legacy
     // width-only button contract above (Flex/HL2/ANAN/Sim).
     RxFilterControl rxFilterControl;
+    QMap<int, RxFilterControl> sliceFilterControls;
+
+    RxFilterControl filterControlForSlice(int sliceId) const
+    {
+        return sliceFilterControls.value(sliceId, rxFilterControl);
+    }
 
     // Whether the radio implements the independent TX low/high cutoff controls
     // presented by PhoneApplet. False hides the complete control row rather

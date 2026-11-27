@@ -5005,6 +5005,11 @@ void VfoWidget::animateSignalMeter()
 
 // ── Slice connection ──────────────────────────────────────────────────────────
 
+int VfoWidget::boundSliceId() const
+{
+    return m_slice ? m_slice->sliceId() : -1;
+}
+
 void VfoWidget::setSlice(SliceModel* slice)
 {
     qDebug() << "VfoWidget::setSlice:" << (slice ? slice->sliceId() : -1)

@@ -53,6 +53,11 @@ the measured relative display slope of 0.72 dB/unit and REF range −20…+20 dB
 The absolute dBm floor remains estimated. No model-specific renderer or audio
 processor is installed.
 
+FIL slot selection uses `26` with the receiver’s current mode and DATA variant.
+Filter edits and readbacks target `29 00` (MAIN) or `29 01` (SUB) with IF width
+`1A 03` and Twin PBT `14 07/08`. A slot selection only requests the slot.
+Width and PBT readbacks supply that receiver’s passband.
+
 ## IC-7851 lab learnings
 
 Authority: the operator's Icom oracle §§13.15–13.16 and §14, the retained
@@ -231,7 +236,7 @@ close #6871/#6872 from offline tests alone.
 
 ## Deferred work and core transport risks
 
-Receiver-specific DSP, true user-programmed filter widths/PBT, all antenna
+Receiver-specific DSP, all antenna
 combinations, meter calibration, PSK labels, CW text, memories, DPD/inhibit UI,
 firmware-specific extensions and LAN IF demodulation are outside this initial
 bring-up. This Ethernet path supplies amplitude traces and AF, not wideband IQ.

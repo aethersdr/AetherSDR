@@ -8327,7 +8327,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 // The VFO's filter grid and the RX applet's are two views of one
                 // radio; only the applet was being told what the hardware has.
                 vfo->setRadioFilterControl(
-                    connected ? caps.rxFilterControl : RxFilterControl{});
+                    connected ? caps.filterControlForSlice(vfo->boundSliceId()) : RxFilterControl{});
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                     : QList<int>{});
             }

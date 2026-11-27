@@ -117,6 +117,7 @@ struct IcomCivBackendTestAccess {
         const QString hex = QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(wire.data()), wire.size()).toHex(' '));
         return std::ranges::any_of(b.m_civTrace, [&](const auto& row) { return row.outbound && row.hex == hex; });
     }
+    static std::size_t queueDepth(const IcomCivBackend& b) { return b.m_civScheduler.stats().queueDepth; }
     static int borrowedSlot(const IcomCivBackend& b, int receiver) { return b.m_receivers[receiver].borrowedSlot; }
     static std::size_t snapshots(const IcomCivBackend& b) { return b.m_dualSavedPresets.size(); }
     static auto snapshot(const IcomCivBackend& b, int slot) { return b.m_dualSavedPresets.at({6, slot}); }
@@ -268,6 +269,41 @@ int main(int argc, char** argv)
         IcomCivBackendTestAccess::pollLan(backend, true);
         IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
         check(audioFrames > 0 && warnings.size() == 2, "late AF readback resumes audio without another warning");
+    }
+    for (std::uint8_t model : {0x98, 0xb2, 0x8e}) {
+        using Access = IcomCivBackendTestAccess;
+        IcomCivBackend backend;
+        Access::prepare(backend, model);
+        for (std::uint8_t rx : {0, 1}) {
+            const std::uint8_t slot = rx + 1;
+            Access::inject(backend, {0x26, rx, 1, 0, slot});
+            const auto read = buildFrameSub(0x50, 0x29, rx, std::array<std::uint8_t, 2>{0x1a, 3});
+            Access::inFlightReadKey(backend, read);
+            Access::inject(backend, {0x29, rx, 0x1a, 3, static_cast<std::uint8_t>(0x20 + rx)});
+            const RxFilterControl control = backend.capabilities().filterControlForSlice(rx);
+            check(control.selectedPresetId == slot && control.presets.at(rx).widthHz == 1600 + 100 * rx,
+                  "receiver's confirmed mode and slot own the addressed BCD width");
+        }
+        Access::clearCommands(backend);
+        backend.requestSliceFilter(1, {150, 2750, SliceFilterRequest::Origin::ModeNormalization});
+        check(Access::queueDepth(backend) == 0 && !Access::sent(backend, buildFrameSub(
+                  0x50, 0x29, 1, std::array<std::uint8_t,3>{0x1a, 3, 0x30})),
+              "desktop mode normalization preserves the radio's saved filter width");
+        backend.setSliceFilterPreset(1, 3);
+        Access::pump(backend);
+        check(Access::sent(backend, buildFrameSub(0x50, 0x26, 1, std::array<std::uint8_t,3>{1, 0, 3})),
+              "FIL3 recall on SUB preserves mode/DATA and selects only the slot");
+        check(Access::queueDepth(backend) == 1, "only the slot readback follows the slot write");
+        const auto subRead = buildFrameSub(0x50, 0x29, 1, std::array<std::uint8_t,2>{0x1a, 3});
+        Access::inFlightReadKey(backend, subRead);
+        Access::inject(backend, {0x26, 1, 1, 0, 3});
+        Access::inject(backend, {0x29, 1, 0x1a, 3, 0x11});
+        const auto caps = backend.capabilities();
+        check(caps.filterControlForSlice(0).presets[0].widthHz == 1600
+              && caps.filterControlForSlice(1).presets[1].widthHz == 1700
+              && caps.filterControlForSlice(1).selectedPresetId == 3
+              && caps.filterControlForSlice(1).presets[2].widthHz == 1800,
+              "switching SUB slots preserves known widths for both receivers");
     }
     // Stock IC-7110 in Auto, then two explicit model choices at a different
     // radio's factory address. A stale channel override cannot grant stereo.

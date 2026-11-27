@@ -61,6 +61,7 @@ public:
 #endif
 
     void setSlice(SliceModel* slice);
+    int boundSliceId() const;
     void setAntennaList(const QStringList& ants);
     void setTransmitModel(TransmitModel* txModel);
     void setRadioModel(RadioModel* radioModel);

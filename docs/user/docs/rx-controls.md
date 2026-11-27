@@ -55,7 +55,11 @@ Mode-dependent filter width buttons (FlexRadio):
 - **FM/NFM**: fixed by the radio
 
 Radios that publish their own filter widths (such as networked Icom) show
-those instead.
+those instead. On the IC-7610, IC-7760 and IC-7851, FIL1 through FIL3 select
+the radio’s saved slots for the addressed receiver. Drag the passband edges to
+edit the selected slot. Switching slots recalls the saved width. FM has fixed
+widths. The VFO controls follow their own receiver, and the RX applet follows
+the active receiver.
 
 #### Adaptive RX filter (USB/LSB)
 

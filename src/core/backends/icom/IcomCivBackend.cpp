@@ -657,34 +657,46 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // factory value once the reply is current, while retaining the documented
     // defaults for the two unselected slots that the protocol cannot expose.
     if (m_model->hasScope || m_model->isKnown()) {
-        // std::vector<int> from the codec (which stays Qt-free) into the
-        // QList the capability struct carries.
-        std::vector<int> widths = filterWidthsForMode(currentLadderMode().toStdString());
-        if (widths.size() == 3 && passbandWidthIsCurrent() && m_ifWidthHz > 0
-            && m_filter >= 1 && m_filter <= 3) {
-            widths[static_cast<std::size_t>(3 - m_filter)] = m_ifWidthHz;
-            std::sort(widths.begin(), widths.end());
+        const auto makeControl = [](const std::string& mode, int slot, int width) {
+            RxFilterControl control;
+            const auto limits = filterWidthLimitsFor(mode);
+            control.minimumWidthHz = limits.minHz;
+            control.maximumWidthHz = limits.maxHz;
+            control.widthStepHz = limits.minHz == 200 ? 200 : 50;
+            control.selectedPresetId = slot;
+            for (const auto& preset : filterPresetsForMode(mode, slot, width)) {
+                control.presets.append({preset.id, QStringLiteral("FIL%1").arg(preset.id), preset.widthHz});
+            }
+            return control;
+        };
+        if (hasDualReceivers()) {
+            for (int receiver = 0; receiver < 2; ++receiver) {
+                const ReceiverState& state = m_receivers[receiver];
+                RxFilterControl control;
+                if (state.modeKnown) {
+                    control = makeControl(filterMode(state.mode, state.data != 0), state.filter, state.widthHz);
+                    for (RxFilterPreset& preset : control.presets) {
+                        const int saved = state.slotWidths[preset.id - 1];
+                        if (saved > 0) { preset.widthHz = saved; }
+                    }
+                }
+                c.sliceFilterControls.insert(receiver, control);
+            }
+            c.rxFilterControl = c.sliceFilterControls.value(m_dualFocus);
+        } else {
+            c.rxFilterControl = makeControl(currentLadderMode().toStdString(), m_filter,
+                                            passbandWidthIsCurrent() ? m_ifWidthHz : 0);
         }
-        c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
-
-        // FIL1/FIL2/FIL3 are identities, not widths. The selected slot's
-        // width is mutable through 1A 03, so publish the identity separately
-        // and keep it in radio order even when its content changes. Width-only
-        // consumers retain the legacy narrow-to-wide list above.
-        const FilterWidthLimits limits =
-            filterWidthLimitsFor(currentLadderMode().toStdString());
-        c.rxFilterControl.minimumWidthHz = limits.minHz;
-        c.rxFilterControl.maximumWidthHz = limits.maxHz;
-        c.rxFilterControl.widthStepHz = limits.minHz == 200 ? 200 : 50;
-        c.rxFilterControl.selectedPresetId = m_filter;
-        const int selectedWidth = passbandWidthIsCurrent() ? m_ifWidthHz : 0;
-        const std::vector<FilterPresetState> presets = filterPresetsForMode(
-            currentLadderMode().toStdString(), m_filter, selectedWidth);
-        for (const FilterPresetState& preset : presets) {
-            c.rxFilterControl.presets.append(RxFilterPreset{
-                preset.id,
-                QStringLiteral("FIL%1").arg(preset.id),
-                preset.widthHz});
+        if (!hasDualReceivers()) {
+            auto widths = filterWidthsForMode(currentLadderMode().toStdString());
+            if (widths.size() == 3 && passbandWidthIsCurrent() && m_ifWidthHz > 0 && m_filter >= 1 && m_filter <= 3) {
+                widths[3 - m_filter] = m_ifWidthHz;
+                std::sort(widths.begin(), widths.end());
+            }
+            c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
+        } else {
+            for (const auto& preset : c.rxFilterControl.presets) { c.rxFilterWidthsHz.append(preset.widthHz); }
+            std::sort(c.rxFilterWidthsHz.begin(), c.rxFilterWidthsHz.end());
         }
     }
 
@@ -831,13 +843,16 @@ QString IcomCivBackend::currentNeutralMode() const
 // The mode the filter ladder is keyed on. modeToNeutral collapses RTTY/RTTY-R
 // to DIGL/DIGU (no neutral RTTY), but the IC-705's RTTY ladder is
 // 2.4k/500/250 versus SSB's 3.0k/2.4k/1.8k, so the ladder needs "RTTY".
+std::string IcomCivBackend::filterMode(CivMode mode, bool data)
+{
+    if (mode == CivMode::Rtty) { return "RTTY"; }
+    if (mode == CivMode::RttyR) { return "RTTYR"; }
+    return modeToNeutral(mode, data);
+}
+
 QString IcomCivBackend::currentLadderMode() const
 {
-    if (m_mode == CivMode::Rtty)
-        return QStringLiteral("RTTY");
-    if (m_mode == CivMode::RttyR)
-        return QStringLiteral("RTTYR");
-    return currentNeutralMode();
+    return QString::fromStdString(filterMode(m_mode, m_dataMode));
 }
 
 void IcomCivBackend::publishModeState()
@@ -5484,22 +5499,28 @@ void IcomCivBackend::setSliceMode(int receiver, const QString& mode)
     publishCapabilities();
 }
 
+void IcomCivBackend::requestSliceFilter(int receiver, const SliceFilterRequest& request)
+{
+    if (hasDualReceivers() && request.origin == SliceFilterRequest::Origin::ModeNormalization) {
+        return;
+    }
+    setSliceFilter(receiver, request.lowHz, request.highHz);
+}
+
 void IcomCivBackend::setSliceFilter(int receiver, int lowHz, int highHz)
 {
     if (hasSelectedBandDualwatch()) {
         if (receiver == 0 && m_mainModeConfirmed) { publishModeState(); }
         return;
     }
-    if (hasDualReceivers()) {
-        // Native FIL slots are the MVP filter surface; do not reshape a
-        // selected front-panel receiver through an unaddressed width write.
-        if (receiver >= 0 && receiver < 2) { publishDualReceiver(receiver); }
+    const bool dual = hasDualReceivers();
+    if (dual && (receiver < 0 || receiver > 1 || !m_receivers[receiver].modeKnown
+                 || m_receivers[receiver].modeWritePending)) {
         return;
     }
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
-    // The LADDER mode, not the neutral one: the two differ in RTTY, where the
-    // radio's own widths are 2.4k/500/250 — see currentLadderMode().
-    const std::string ladder = currentLadderMode().toStdString();
+    const std::string ladder = dual ? filterMode(m_receivers[receiver].mode, m_receivers[receiver].data != 0)
+                                    : currentLadderMode().toStdString();
     const int width = std::abs(highHz - lowHz);
 
     const FilterWidthLimits limits = filterWidthLimitsFor(ladder);
@@ -5534,13 +5555,17 @@ void IcomCivBackend::setSliceFilter(int receiver, int lowHz, int highHz)
     const int shift = requestedCentre - passbandCentreHz(ladder, *appliedWidth);
     const int pbtCode = pbtCodeForShiftHz(shift, *appliedWidth);
 
-    sendUserCommand(cmdSetFilterWidth(addr, *code));
+    const auto send = [&](const std::vector<std::uint8_t>& command) {
+        sendUserCommand(dual ? receiverCommand(command, receiver) : command);
+    };
+    send(cmdSetFilterWidth(addr, *code));
     // BOTH PBTs TO THE SAME CODE. Apart they narrow the passband from the
     // inside, and the width command has already set the width — so moving them
     // apart here would subtract from a window that is already the right size,
     // and the operator's drag would come out narrower than they drew it.
-    sendUserCommand(cmdSetLevel(addr, level::kPbtInner, pbtCode));
-    sendUserCommand(cmdSetLevel(addr, level::kPbtOuter, pbtCode));
+    send(cmdSetLevel(addr, level::kPbtInner, pbtCode));
+    send(cmdSetLevel(addr, level::kPbtOuter, pbtCode));
+    if (dual) { return; } // Addressed readbacks publish each receiver's applied shape.
 
     // Optimistic, and corrected by the read-backs sendUserCommand queues. Same
     // reason setSliceMode publishes early: the radio's own report only arrives
