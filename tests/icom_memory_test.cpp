@@ -60,6 +60,26 @@ std::vector<std::uint8_t> ic705Record()
     return p;
 }
 
+std::vector<std::uint8_t> capturedIc705Repeater()
+{
+    // IC-705 1A 00 reply payload for group 00, channel 00, with Split OFF.
+    return {
+        0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x94, 0x46, 0x01, 0x05, 0x01, 0x00, 0x11, 0x00,
+        0x00, 0x14, 0x13, 0x00, 0x14, 0x13, 0x00, 0x00, 0x23, 0x00,
+        0x00, 0x60, 0x00, 0x43, 0x51, 0x43, 0x51, 0x43, 0x51, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x00, 0x00, 0x00, 0x21, 0x01, 0x05, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x08, 0x85, 0x00, 0x08, 0x85, 0x00, 0x00, 0x23, 0x00,
+        0x00, 0x60, 0x00, 0x43, 0x51, 0x43, 0x51, 0x43, 0x51, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x46, 0x72, 0x65, 0x73, 0x6e, 0x6f, 0x20, 0x41,
+        0x52, 0x43, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    };
+}
+
 std::vector<std::uint8_t> ic7300Record()
 {
     // The IC-7300MK2 guide documents both 4..17 blocks in every record and a
@@ -99,7 +119,17 @@ int main()
     const auto m705 = decodeMemory(MemoryDialect::Ic705, ic705Record());
     check(m705 && m705->group == 12 && m705->channel == 42
               && m705->duplex == 1 && m705->toneMode == 2 && m705->recallable,
-          "IC-705 official grouped memory layout decodes");
+          "IC-705 compact grouped memory layout decodes");
+    auto fullIc705Record = capturedIc705Repeater();
+    const auto repeater = decodeMemory(MemoryDialect::Ic705, fullIc705Record);
+    check(repeater && repeater->occupied && repeater->mode == "FM"
+              && repeater->duplex == 1 && repeater->offsetHz == 600'000
+              && !repeater->split && repeater->recallable,
+          "captured 115-byte IC-705 FM repeater memory with Split OFF is recallable");
+    fullIc705Record[4] = 0x10;
+    const auto splitIc705 = decodeMemory(MemoryDialect::Ic705, fullIc705Record);
+    check(splitIc705 && splitIc705->occupied && splitIc705->split && !splitIc705->recallable,
+          "IC-705 memory with Split ON remains display-only");
     const auto m7300 = decodeMemory(MemoryDialect::Ic7300Mk2, ic7300Record());
     check(m7300 && m7300->group == -1 && m7300->channel == 42
               && m7300->mode == "DFM" && m7300->toneMode == 1 && m7300->recallable,
