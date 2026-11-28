@@ -295,8 +295,16 @@ bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInte
 
 QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
 {
+    return sessionBindAddress(host, requested, QNetworkInterface::allAddresses());
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested,
+                                             const QList<QHostAddress>& hostAddresses)
+{
     if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
         return QHostAddress(QHostAddress::LocalHost);
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && hostAddresses.contains(host))
+        return host;
     return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
 }
 
@@ -421,8 +429,8 @@ bool MetisClient::start(const Params& params)
     m_socket->setReadBufferSize(1 << 21);   // absorb the continuous EP6 torrent
     connect(m_socket, &QUdpSocket::readyRead, this, &MetisClient::onReadyRead);
 
-    // Counters belong to the session. The bind is a wildcard, so the local address
-    // reads "*" until onReadyRead() resolves it from a datagram's destination.
+    // Counters belong to the session. The local address reads "*" until onReadyRead()
+    // resolves it from a datagram's destination; a wildcard bind cannot tell it sooner.
     m_link = LinkCounters{};
     m_link.localEndpoint = QStringLiteral("*:%1").arg(m_socket->localPort());
     m_linkEndpointResolved = false;
