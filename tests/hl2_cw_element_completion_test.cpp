@@ -174,8 +174,8 @@ static std::int64_t samplesOfMs(std::int64_t ms) { return ms * kRate / 1000; }
 static bool within(std::int64_t got, std::int64_t want, std::int64_t tol) { return got >= want - tol && got <= want + tol; }
 
 // The host-text rigs are paced off the wall clock, so under ASan/TSan (2-3x
-// slower) the first dit's fall lands a few samples late (2883..2886 of 2880 in
-// the 2026-11-26 sanitizer run, #7621). Widen only that length tolerance there.
+// slower) the first dit's fall can land a few samples late (#7621). Widen only
+// that length tolerance there.
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
 #  define AETHER_TEST_SANITIZED 1
 #elif defined(__has_feature)
