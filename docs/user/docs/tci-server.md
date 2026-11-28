@@ -371,7 +371,7 @@ as it needs, and may send none. On a Hermes-Lite 2 with one receiver, for
 example:
 
 ```
-aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload;
+aethersdr_ext:1,tx_filter_band,hl2,rx_antenna,tx_antenna,rx_rf_gain,rx_auto_rf_gain,rx_overload,tx_power_max;
 aethersdr_tx_filter_band:0,100,2900;
 aethersdr_hl2_filter_board:n2adr_rxtx,false;
 aethersdr_rx_antennas:0,ANT;
@@ -382,6 +382,7 @@ aethersdr_rx_rf_gain_range:0,-12,48,1;
 aethersdr_rx_rf_gain:0,20;
 aethersdr_rx_auto_rf_gain:false;
 aethersdr_rx_overload:clean,false,0;
+aethersdr_tx_power_max:0,5;
 ```
 
 On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
@@ -658,6 +659,38 @@ aethersdr_rx_span:1,192000;       # set it
   the span. A span below a client's `iq_samplerate` therefore also lowers the
   IQ rate, and `iq_samplerate:` is sent again with the rate the frames now
   carry. It never goes above the radio's rate.
+
+#### Transmit power ceiling: `tx_power_max`
+
+Offered while the connected radio can transmit and has reported its maximum
+transmit power. Read only.
+
+```
+aethersdr_tx_power_max;           # read: aethersdr_tx_power_max:0,5;
+aethersdr_tx_power_max:0;         # the same, naming the transmitting receiver
+```
+
+- `aethersdr_tx_power_max:<trx>,<watts>;` is the radio's maximum transmit
+  power in whole watts, the value that `drive:` 100 stands for, sent for
+  `<trx>`, the receiver that transmits. It is the same ceiling AetherSDR shows
+  and publishes over MQTT as `max_power_level`: on a Flex, the radio's own
+  maximum power level (higher with a Power Genius XL or an Aurora); on an Icom
+  that AetherSDR has a power table for, the model's rated power for the band of
+  the transmit frequency; on a Hermes-Lite 2, `5`.
+- It is the radio's rating, not the drive setting and not a measurement. It
+  does not say the radio will transmit at the current frequency, and on a
+  Hermes-Lite 2 it ignores the TX route: with transmit on `RF1` it still reads
+  `5`.
+- There is one line, for the receiver that transmits. A read naming another
+  receiver is ignored, and so is a read with anything after the receiver.
+- The line is sent again when the value or the receiver changes: tuning into
+  a band with another ceiling, moving transmit to another receiver, or a
+  reconnect. Tuning within a band sends nothing. While no receiver transmits,
+  the line keeps naming the last one that did. If that receiver is closed,
+  the line moves to receiver 0.
+- A receive-only radio, such as an RTL-SDR, is not offered it, and neither is
+  a radio with no reported ceiling: one that has not reported it yet, or an
+  Icom without a power table.
 
 ## Known issues
 

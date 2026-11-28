@@ -10,6 +10,7 @@
 #include "TciAntennaExtension.h"
 #include "TciSpanExtension.h"
 #include "core/backends/IRadioBackend.h"
+#include "TciTxPowerExtension.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -570,6 +571,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 QTimer::singleShot(500, this, [this]() {
                     if (m_model && !m_trxMap.trxHasLiveSlice(m_model, m_lastTxTrx)) {
                         m_lastTxTrx = 0;
+                        if (m_txPowerMaxNotice) {
+                            m_txPowerMaxNotice->queue();  // its line names this trx
+                        }
                     }
                 });
             }
@@ -788,6 +792,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }
     // After the trx map is seeded and wired, which the gain lines name.
     registerRxGainGroups();
+    registerTxPowerMaxGroup();
 }
 
 TciServer::~TciServer()
@@ -5451,6 +5456,124 @@ bool TciServer::broadcastSpan()
     for (const QString& line : std::as_const(lines)) {
         broadcastExtension(line);
     }
+    return true;
+}
+
+// ── Extension set: transmit ceiling ─────────────────────────────────────────
+// Read only: TransmitModel::maxPowerLevel(), the value MQTT publishes as
+// max_power_level, named for the TX trx the way tx_filter_band names it.
+void TciServer::registerTxPowerMaxGroup()
+{
+    m_txPowerMaxNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastTxPowerMax(); });
+    TciExtensionSet::Group group;
+    group.token = QString::fromLatin1(TciTxPowerExtension::kToken);
+    group.commands = QStringList{QString::fromLatin1(TciTxPowerExtension::kCommand)};
+    group.offered = [this] { return txPowerMaxOffered(); };
+    group.stateLines = [this] {
+        const QString line = txPowerMaxLine(currentTxPowerMax());
+        return line.isEmpty() ? QStringList{} : QStringList{line};
+    };
+    group.handle = [this](const QString&, const QStringList& args) {
+        return handleTxPowerMax(args);
+    };
+    group.resent = [this] { m_txPowerMaxAnnounced = currentTxPowerMax(); };
+    registerExtensionGroup(std::move(group));
+    if (!m_model) {
+        return;
+    }
+    m_txPowerMaxAnnounced = currentTxPowerMax();
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities&) { m_txPowerMaxNotice->queue(); });
+    // The value, and its latch: a first report equal to the default moves only
+    // the latch, and that edge is powerProvenanceChanged.
+    const TransmitModel* tx = &m_model->transmitModel();
+    connect(tx, &TransmitModel::maxPowerLevelChanged, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    connect(tx, &TransmitModel::powerProvenanceChanged, this,
+            [this] { m_txPowerMaxNotice->queue(); });
+    // The line names the TX trx. A reconnect's reclaim binds slices on the
+    // occupancy edge alone, without sliceAdded.
+    connect(m_model, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
+        wireTxPowerMaxSlice(slice);
+        m_txPowerMaxNotice->queue();
+    });
+    connect(m_model, &RadioModel::sliceRemoved, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    connect(m_model, &RadioModel::slotOccupancyChanged, this,
+            [this](int) { m_txPowerMaxNotice->queue(); });
+    for (SliceModel* slice : m_model->slices()) {
+        wireTxPowerMaxSlice(slice);
+    }
+}
+
+void TciServer::wireTxPowerMaxSlice(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    // A band change drops TX for ~340 ms; look once it has settled.
+    connect(slice, &SliceModel::txSliceChanged, this, [this](bool) {
+        QTimer::singleShot(kSplitSettleMs, this, [this] { m_txPowerMaxNotice->queue(); });
+    });
+}
+
+TciServer::TxPowerMax TciServer::currentTxPowerMax() const
+{
+    TxPowerMax state;
+    if (!m_model) {
+        return state;
+    }
+    // canTransmit is read live: another group's handler on the same capability
+    // edge can announce the set before this group's handler has run.
+    const TransmitModel& tx = m_model->transmitModel();
+    if (TciTxPowerExtension::offered(m_model->isConnected(),
+                                     m_model->backendCapabilities().canTransmit,
+                                     tx.haveMaxPowerLevel(), tx.maxPowerLevel())) {
+        state.trx = extensionTxTrx();
+        state.watts = tx.maxPowerLevel();
+    }
+    return state;
+}
+
+bool TciServer::txPowerMaxOffered() const
+{
+    return currentTxPowerMax().trx >= 0;
+}
+
+QString TciServer::txPowerMaxLine(const TxPowerMax& state) const
+{
+    return state.trx < 0 ? QString() : TciTxPowerExtension::line(state.trx, state.watts);
+}
+
+TciExtensionSet::Result TciServer::handleTxPowerMax(const QStringList& args)
+{
+    TciExtensionSet::Result result;
+    const std::optional<int> trx = TciTxPowerExtension::parseRead(args);
+    const TxPowerMax current = currentTxPowerMax();
+    if (trx && current.trx >= 0 && (*trx < 0 || *trx == current.trx)) {
+        result.reply = txPowerMaxLine(current);
+    }
+    return result;
+}
+
+// A gate edge (connection, canTransmit, the latch) re-announces the set, which
+// carries the state or its absence; otherwise one line when value or trx moved.
+bool TciServer::broadcastTxPowerMax()
+{
+    const TxPowerMax current = currentTxPowerMax();
+    if (!anyExtensionClient()) {
+        m_txPowerMaxAnnounced = current;
+        return false;
+    }
+    if (announceExtensionSet() || current == m_txPowerMaxAnnounced) {
+        return false;
+    }
+    m_txPowerMaxAnnounced = current;
+    if (current.trx < 0) {
+        return false;
+    }
+    broadcastExtension(txPowerMaxLine(current));
     return true;
 }
 

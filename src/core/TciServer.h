@@ -97,6 +97,7 @@ class TciServer : public QObject {
     friend class TciTxPassbandExtensionTest;
     friend class TciRxGainExtensionTest;
     friend class TciSpanExtensionTest;
+    friend class TciTxPowerExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -355,6 +356,19 @@ private:
     bool broadcastSpan();
     void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
+    // Extension group `tx_power_max` (TciTxPowerExtension.h).
+    struct TxPowerMax {
+        int trx{-1};    // -1: not offered
+        int watts{0};   // TransmitModel::maxPowerLevel()
+        bool operator==(const TxPowerMax&) const = default;
+    };
+    void registerTxPowerMaxGroup();
+    void wireTxPowerMaxSlice(SliceModel* slice);
+    TxPowerMax currentTxPowerMax() const;
+    bool txPowerMaxOffered() const;
+    QString txPowerMaxLine(const TxPowerMax& state) const;
+    TciExtensionSet::Result handleTxPowerMax(const QStringList& args);
+    bool broadcastTxPowerMax();
     // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
     enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
     static constexpr int kAntennaLineKinds = 4;
@@ -731,6 +745,10 @@ private:
     // a notice carries what moved; a dispatched set owes its trx a line even
     // when the radio kept the span it had.
     std::unique_ptr<TciExtensionNotice> m_spanNotice;
+    // Extension set, transmit ceiling: the last state sent to enabled clients,
+    // kept with none enabled too.
+    std::unique_ptr<TciExtensionNotice> m_txPowerMaxNotice;
+    TxPowerMax        m_txPowerMaxAnnounced;
     QTimer*           m_spanAnswerTimer{nullptr};  // the nearest owed deadline
     QHash<int, qint64> m_spanAnnounced;
     QString           m_spanRatesAnnounced;
