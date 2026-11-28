@@ -429,8 +429,8 @@ bool MetisClient::start(const Params& params)
     m_socket->setReadBufferSize(1 << 21);   // absorb the continuous EP6 torrent
     connect(m_socket, &QUdpSocket::readyRead, this, &MetisClient::onReadyRead);
 
-    // Counters belong to the session. The bind is a wildcard, so the local address
-    // reads "*" until onReadyRead() resolves it from a datagram's destination.
+    // Counters belong to the session. The local address reads "*" until onReadyRead()
+    // resolves it from a datagram's destination; a wildcard bind cannot tell it sooner.
     m_link = LinkCounters{};
     m_link.localEndpoint = QStringLiteral("*:%1").arg(m_socket->localPort());
     m_linkEndpointResolved = false;

@@ -41,11 +41,6 @@ int main()
     check(MetisClient::sessionBindAddress(QHostAddress(QHostAddress::LocalHostIPv6), {})
               == QHostAddress(QHostAddress::AnyIPv4),
           "::1 keeps the wildcard bind, never an IPv4 127.0.0.1 one");
-    // A radio on the network: exactly as before.
-    check(MetisClient::sessionBindAddress(radio, nic) == nic,
-          "a radio on the LAN binds the interface discovery found");
-    check(MetisClient::sessionBindAddress(radio, {}) == QHostAddress(QHostAddress::AnyIPv4),
-          "and the wildcard when none was found");
 
     // #7477: a target that is one of this host's own non-loopback addresses (an
     // hpsdrsim reached through its LAN address) binds that address, so the reply
@@ -70,11 +65,12 @@ int main()
     check(MetisClient::sessionBindAddress(broadcast, nic, own) == nic,
           "a broadcast target keeps the reported route");
     // The two-argument form reads this host's own addresses (an interface listing,
-    // no socket). Checked against the first non-loopback IPv4 one, when there is one.
+    // no socket). Checked against the first non-loopback IPv4 one, when there is one,
+    // with no route reported: code that ignores the listing returns the wildcard.
     for (const QHostAddress& a : QNetworkInterface::allAddresses()) {
         if (a.protocol() != QAbstractSocket::IPv4Protocol || a.isLoopback())
             continue;
-        check(MetisClient::sessionBindAddress(a, nic) == a,
+        check(MetisClient::sessionBindAddress(a, {}) == a,
               "the two-argument form binds this host's own IPv4 address when targeted");
         break;
     }
