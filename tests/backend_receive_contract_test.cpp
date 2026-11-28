@@ -23,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -156,6 +157,19 @@ SliceDelta last(const QSignalSpy& observations)
                               : report.at(1).value<SliceDelta>();
 }
 
+// RadioCapabilities::PanViewHold per family; negative = must be absent. Absent
+// refuses Lock view, so a dropped declaration disables it with no other symptom.
+double expectedPanViewHold(const char* family)
+{
+    if (std::strcmp(family, "flex") == 0 || std::strcmp(family, "sim") == 0) {
+        return 1.0;
+    }
+    if (std::strcmp(family, "hl2") == 0) {
+        return 0.8;  // Hl2Backend::kUsablePassbandFraction
+    }
+    return -1.0;  // icom, anan, rtl: the view moves with the slice
+}
+
 void declarations()
 {
     for (const Family& family : kFamilies) {
@@ -170,6 +184,11 @@ void declarations()
                   && caps.receiveFilterControl.has_value() == family.daemonFilter,
               "daemon capability declarations are independent of desktop verb support");
         check(!backend->isConnected(), "constructing the contract fixture never connects hardware");
+        const double hold = expectedPanViewHold(family.name);
+        check(hold < 0.0 ? !caps.panViewHold.has_value()
+                         : caps.panViewHold.has_value()
+                               && std::abs(caps.panViewHold->holdableSpanFraction - hold) < 1e-12,
+              "the family declares its Lock view hold window (absent refuses)");
     }
 }
 
