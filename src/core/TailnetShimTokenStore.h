@@ -21,7 +21,7 @@ public:
     // Which radio agent's token: the shim's, or the WSPR receiver's
     // (tools/wspr-agent), which issues one the same way on first use. Each
     // has its own keychain entry per radio serial.
-    enum class Entry { TailnetShim, Wspr };
+    enum class Entry { TailnetShim, Wspr, Ft8 };
 
     // Calls back on context's thread with the stored token, or an empty
     // string when none is stored or the keychain is unavailable.

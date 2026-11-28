@@ -19,9 +19,17 @@ namespace {
 
 QString keyFor(const QString& radioSerial, TailnetShimTokenStore::Entry entry)
 {
-    return (entry == TailnetShimTokenStore::Entry::Wspr ? QStringLiteral("AetherWSPR/AdminToken/")
-                                                        : QStringLiteral("TailnetShim/AdminToken/"))
-        + radioSerial;
+    // One keychain entry per shim, per radio. A new shim adds a case here;
+    // the entries are independent, so a token is never shared between them.
+    switch (entry) {
+    case TailnetShimTokenStore::Entry::Wspr:
+        return QStringLiteral("AetherWSPR/AdminToken/") + radioSerial;
+    case TailnetShimTokenStore::Entry::Ft8:
+        return QStringLiteral("AetherFT8/AdminToken/") + radioSerial;
+    case TailnetShimTokenStore::Entry::TailnetShim:
+        break;
+    }
+    return QStringLiteral("TailnetShim/AdminToken/") + radioSerial;
 }
 
 // Session copy: always written, so a save followed at once by a load never

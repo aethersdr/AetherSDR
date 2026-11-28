@@ -35,6 +35,7 @@ const sidebars = {
         "flexradio",
         "radio-health-tools",
         "wspr-receiver",
+        "ft8-receiver",
         "hermes-lite-2",
         "networked-icom",
         "anan-g2",
