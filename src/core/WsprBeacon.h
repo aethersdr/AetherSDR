@@ -60,6 +60,18 @@ public:
         return TimeoutShortfall::None;
     }
 
+    // The slot-boundary gate once the stream is ready. A busy transmitter is
+    // waited out first: a refusal restores the borrowed TX filter, which must
+    // not reach the radio during another producer's over.
+    enum class SlotDecision { Key, Defer, StopBusy, StopTimeout };
+    static constexpr SlotDecision slotDecision(bool transmitterBusy, bool deferralsLeft,
+                                               bool timeoutsSufficient)
+    {
+        if (transmitterBusy) { return deferralsLeft ? SlotDecision::Defer : SlotDecision::StopBusy; }
+        if (!timeoutsSufficient) { return SlotDecision::StopTimeout; }
+        return SlotDecision::Key;
+    }
+
     using Symbols = std::array<uint8_t, kSymbolCount>;
 
     struct EncodeResult {

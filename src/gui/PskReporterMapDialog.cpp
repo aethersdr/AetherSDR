@@ -2323,13 +2323,6 @@ void PskReporterMapDialog::updateBeaconState()
         return;
     }
 
-    // Either time-out can change between arming and the slot.
-    const QString timeoutProblem = beaconTimeoutProblem();
-    if (!timeoutProblem.isEmpty()) {
-        stopBeacon(tr("Stopped: %1").arg(timeoutProblem));
-        return;
-    }
-
     const WsprBeacon::EncodeResult encoded = WsprBeacon::encode(
         m_beaconCallsign->text(), m_beaconGrid->text(),
         m_beaconPower->currentData().toInt());
@@ -2360,14 +2353,26 @@ void PskReporterMapDialog::updateBeaconState()
     // Checked here as well as inside reassertBeaconChannel() because only this
     // caller knows a busy transmitter is worth waiting out, where a slice that
     // moved band is not.
-    if (m_radioModel->transmitModel().isTransmitting()
-        || m_radioModel->transmitModel().isTuning()) {
-        if (m_beaconDeferrals >= kBeaconMaxDeferrals) {
-            stopBeacon(tr("Stopped: transmitter is in use"));
-            return;
-        }
+    //
+    // Either time-out can change between arming and the slot. It is re-checked
+    // only once the transmitter is idle: the refusal restores the borrowed TX
+    // filter, which must not reach the radio during another producer's over.
+    const bool transmitterBusy = m_radioModel->transmitModel().isTransmitting()
+        || m_radioModel->transmitModel().isTuning();
+    const QString timeoutProblem = transmitterBusy ? QString() : beaconTimeoutProblem();
+    switch (WsprBeacon::slotDecision(transmitterBusy, m_beaconDeferrals < kBeaconMaxDeferrals,
+                                     timeoutProblem.isEmpty())) {
+    case WsprBeacon::SlotDecision::StopBusy:
+        stopBeacon(tr("Stopped: transmitter is in use"));
+        return;
+    case WsprBeacon::SlotDecision::Defer:
         deferBeaconToNextSlot(tr("Re-armed · transmitter is in use"));
         return;
+    case WsprBeacon::SlotDecision::StopTimeout:
+        stopBeacon(tr("Stopped: %1").arg(timeoutProblem));
+        return;
+    case WsprBeacon::SlotDecision::Key:
+        break;
     }
 
     // Last look at the channel before the key. See reassertBeaconChannel().

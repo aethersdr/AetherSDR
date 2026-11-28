@@ -158,6 +158,19 @@ void testSampleTimingAndTailSilence()
           "the default host time-out and a disabled one still start a beacon");
     static_assert(WsprBeacon::kTransmitDurationMs < WsprBeacon::kMinimumInterlockTimeoutMs);
 
+    // Slot gate (#7639 review): busy defers before a short time-out refuses.
+    using Slot = WsprBeacon::SlotDecision;
+    check(WsprBeacon::slotDecision(true, true, false) == Slot::Defer,
+          "a busy transmitter defers the slot before a short time-out stops the beacon");
+    check(WsprBeacon::slotDecision(true, false, false) == Slot::StopBusy,
+          "a transmitter busy past the deferrals stops as busy, not as a time-out");
+    check(WsprBeacon::slotDecision(false, true, false) == Slot::StopTimeout
+              && WsprBeacon::slotDecision(false, false, false) == Slot::StopTimeout,
+          "an idle transmitter with a short time-out stops before keying");
+    check(WsprBeacon::slotDecision(false, true, true) == Slot::Key
+              && WsprBeacon::slotDecision(true, true, true) == Slot::Defer,
+          "idle and sufficient keys; busy and sufficient still defers");
+
     const WsprBeacon::EncodeResult encoded =
         WsprBeacon::encode(QStringLiteral("K1ABC"),
                            QStringLiteral("FN42"), 37);
