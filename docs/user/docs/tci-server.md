@@ -686,7 +686,8 @@ aethersdr_tx_power_max:0;         # the same, naming the transmitting receiver
 - The line is sent again when the value or the receiver changes: tuning into
   a band with another ceiling, moving transmit to another receiver, or a
   reconnect. Tuning within a band sends nothing. While no receiver transmits,
-  the line keeps naming the last one that did.
+  the line keeps naming the last one that did. If that receiver is closed,
+  the line moves to receiver 0.
 - A receive-only radio, such as an RTL-SDR, is not offered it, and neither is
   a radio with no reported ceiling: one that has not reported it yet, or an
   Icom without a power table.
