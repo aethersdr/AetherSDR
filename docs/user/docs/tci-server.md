@@ -396,6 +396,37 @@ On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
   `rx_ctun_ex`) work without the enable, as before.
 
+#### Asking for a new extension
+
+An extension is anything a client sees that TCI 2.1 does not define: a new
+command, a new argument, field or value on an existing command, or a new
+extension set. If your TCI client needs one, start by joining the AetherSDR
+Discord's TCI channel and making the case for it there:
+<https://discord.gg/XFJkKeHeqB>. The request then goes through an RFC, and its
+pull request must give all of the following in its description:
+
+- **The user need**, naming the **released** client that asks for it.
+- **Prior art**: a search for an existing implementation that already does
+  this (TCI-X, another server). If one exists, AetherSDR adopts its name under
+  the `aethersdr_` prefix rather than inventing a new one.
+- **Why TCI 2.1 is not enough.**
+- **A regression commitment**: the author fixes any regression in the
+  extension for two releases after it ships. One that breaks in a release and
+  is not fixed by the next one is removed.
+- **Compatibility evidence**: a test plan, and the results of base runs with
+  WSJT-X on a radio, showing that a plain TCI 2.1 client sees no change and
+  receives no extension traffic.
+
+Every extension joins the opt-in `aethersdr_` set. AetherSDR adds no bare
+commands and gives no TCI 2.1 command a new meaning, except to fix a
+spec-compliance bug. The older extensions (`rx_record`, `rx_play`, `tx_gain`,
+`active_slice`, `rx_ctun_ex`) and the `dsb` modulation value are frozen: they
+keep working but gain nothing new. Only the maintainer can waive an item, by
+saying so on the pull request. The contributor rules are in
+[`AGENTS.md`](https://github.com/aethersdr/AetherSDR/blob/main/AGENTS.md#tci-extensions-beyond-tci-21)
+and were ruled on
+[#7312](https://github.com/aethersdr/AetherSDR/issues/7312).
+
 #### TX passband: `tx_filter_band`
 
 Offered when the connected radio has TX low and high cut controls (the Phone

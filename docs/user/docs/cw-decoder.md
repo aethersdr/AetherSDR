@@ -3,12 +3,12 @@ title: "CW Decoder"
 slug: "/cw-decoder"
 description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (IC-705 and IC-7300MK2 supported; other models experimental)
 
 :::
 

@@ -134,10 +134,17 @@ The selection count is shown beside the buttons.
   memory group first). The imported channels join the shared computer-side
   bank. Editing that bank does not write channels back to the Icom radio;
   Sync updates tuning data while preserving your name, owner and group annotations.
+  Memories saved with Split enabled are display-only.
 
 Computer-side changes are coalesced before writing to `AetherSDR.db` and flushed on disconnect or exit. A storage failure is reported; seeing a row in the current list alone does not prove it was saved to disk.
 
 ## Troubleshooting
+
+### Tune is disabled for a synced IC-705 memory
+
+Connect to the radio and select one memory. If you previously synced a memory
+with Split OFF and **Tune** is still disabled, choose its radio memory group
+and click **Sync Memories** again to refresh the saved tuning data.
 
 ### Some memories are missing from the list
 

@@ -1234,6 +1234,10 @@ public:
     // PanLifecycleControl::TxPanCloseWhileKeyed::Refused. A caller that tears
     // down its own state for the pan first (a center lock) checks this.
     bool keyedTxPanCloseRefused(const QString& panId) const;
+    // True when moving TX to sliceId would be refused now: the radio is
+    // transmitting, the backend declares TxSliceControl::ChangeWhileKeyed::Refused and
+    // sliceId is not already the TX slice. TCI's own TX moves ask this first.
+    bool keyedTxSliceChangeRefused(int sliceId) const;
     ReceiveDispatch requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
         const RadioControlCompletion& completion = {}, bool announce = true);
     ReceiveDispatch requestPanDimensions(PanadapterModel* pan, int width, int height, int localPoints);

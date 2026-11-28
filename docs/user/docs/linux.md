@@ -145,6 +145,7 @@ This is worth trying first on a Raspberry Pi whose Mesa driver is newer than its
 - On Ubuntu 26.04 under native Wayland, the panadapter and waterfall can update very slowly ([#4725](https://github.com/aethersdr/AetherSDR/issues/4725)).
 - On some X11 desktops with recent NVIDIA cards the AppImage shows no spectrum or waterfall and the Connect to Radio window never appears ([#4998](https://github.com/aethersdr/AetherSDR/issues/4998)).
 - On a Raspberry Pi 5 with software rendering, the spectrum heat-map fill can use almost all of the main thread, so the window stops responding to clicks under extra load ([#5192](https://github.com/aethersdr/AetherSDR/issues/5192)).
+- On a Bluetooth headset in hands-free mode, receive audio plays, but CW sidetone, the Quindar monitor, QSO recording playback, the Pudu monitor and the WAV player stay silent ([#7618](https://github.com/aethersdr/AetherSDR/issues/7618)).
 
 ## Troubleshooting
 
@@ -192,6 +193,12 @@ The PipeWire library is installed but PipeWire's client configuration is not, so
 2. Restart AetherSDR.
 
 On source builds for Ubuntu or Linux Mint whose device lists show only "Dummy Output", see the distro notes in [docs/BUILDING.md](https://github.com/aethersdr/AetherSDR/blob/main/docs/BUILDING.md#distro-notes).
+
+### A Bluetooth headset in hands-free mode
+
+In hands-free mode (HFP/HSP, the profile that also carries the headset's microphone), the headset's output is mono, often at 16 kHz. AetherSDR plays receive audio on it in mono, mixing the left and right channels at equal level, so a slice panned hard to one side is quieter than on a stereo output. For stereo receive audio, switch the headset to its A2DP profile and use another microphone.
+
+If receive audio could not open on an output, it opens without a restart once you choose another output, or, if AetherSDR follows the system default, once the system default changes.
 
 ### A USB knob, dial or Stream Deck is not found
 

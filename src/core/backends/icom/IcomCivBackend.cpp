@@ -412,6 +412,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // RadioModel does not synthesise a command-edge fallback here.
     c.hasRadioPttReadback = true;
     c.radioPttObservation = std::nullopt;   // the full readback above covers it
+    c.txSliceControl = std::nullopt;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();

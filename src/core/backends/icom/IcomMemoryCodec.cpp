@@ -161,12 +161,10 @@ std::optional<IcomMemoryChannel> decodeMemory(
         return std::nullopt;
     }
 
-    // The IC-7300MK2 always returns the second 4..17 block documented by its
-    // CI-V guide, even when Split is OFF.  Its byte-3 SPLIT flag, decoded
-    // below, is therefore the authority; treating the 47-byte reply length as
-    // Split made every live channel display-only and prevented spot recall.
-    // The older dialects retain their established variable-length contract.
-    memory.split = dialect != MemoryDialect::Ic7300Mk2
+    // IC-705 and IC-7300MK2 replies can carry both frequency blocks with
+    // Split OFF. Use their explicit split flag below. IC-9700 indicates
+    // split by the presence of the second frequency block.
+    memory.split = dialect == MemoryDialect::Ic9700
         && payload.size() == static_cast<std::size_t>(layout.splitBytes);
     const std::optional<std::uint64_t> frequency = decodeFreqExact(
         payload.subspan(static_cast<std::size_t>(layout.frequencyOffset), kFreqBytes),
@@ -224,9 +222,7 @@ std::optional<IcomMemoryChannel> decodeMemory(
         memory.split = memory.split || ((selectByte >> 4) != 0);
     }
     // Neutral recall cannot represent the second frequency block or RPS.
-    // Keep those records visible but non-recallable until their complete
-    // semantics are implemented. A fixed-length IC-7300MK2 reply alone is
-    // not split: the explicit flag above remains authoritative.
+    // Keep split and RPS records visible but non-recallable.
     memory.recallable = mode.mode.has_value() && !memory.split && duplex != 3;
 
     if (layout.dtcsOffset >= 0) {

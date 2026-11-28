@@ -444,6 +444,7 @@ int main(int argc, char** argv)
     bool moveRefused = false;
     bool completionRefused = false;
     QString completionText;
+    int completionCode = 0;
     QStringList seen;
     const Over keyed = runOver(backend, auth, mic, t1k, [&] {
         refusals.clear();
@@ -470,6 +471,7 @@ int main(int argc, char** argv)
         backend.requestTxSlice(1, true, [&](const RadioControlReply& r) {
             completionRefused = r.kind == RadioControlReply::Kind::Refused;
             completionText = r.message;
+            completionCode = r.code;
         }, {});
         backend.setTxSlice(1);   // the requestSliceControl path
         moveRefused = refusals.size() == 2
@@ -496,6 +498,14 @@ int main(int argc, char** argv)
     check(moveRefused, "a keyed TX-slice move is refused on both paths; transmit stays on slice 0");
     check(completionRefused && completionText.contains(QLatin1String("transmitting")),
           "the TX-slice move's completion is answered Refused");
+    // #7589: TCI tells a keyed refusal from any other by this code, and asks
+    // the declared record before it moves TX itself.
+    check(completionCode == RadioControlReply::kRefusedWhileKeyed,
+          "the keyed TX-slice refusal carries kRefusedWhileKeyed");
+    const auto txSliceControl = backend.capabilities().txSliceControl;
+    check(txSliceControl && txSliceControl->changeWhileKeyed
+                                == RadioCapabilities::TxSliceControl::ChangeWhileKeyed::Refused,
+          "the HL2 declares TxSliceControl::ChangeWhileKeyed::Refused");
     const double worstEv = worstOob(keyed.iq);
     const double worstCtl = worstOob(control.iq);
     std::fprintf(stderr, "keyed over: out-of-band %.1f dBc, unchanged over %.1f dBc\n", worstEv, worstCtl);

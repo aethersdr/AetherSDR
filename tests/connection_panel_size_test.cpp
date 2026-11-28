@@ -114,9 +114,13 @@ void checkExperimentalIcomModels()
         report(qPrintable(QStringLiteral("Icom %1 is labeled experimental in the CI-V chooser").arg(value)),
                chooser && index >= 0 && chooser->itemText(index).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
     }
-    const int supported = chooser ? chooser->findData(QStringLiteral("B6")) : -1;
-    report("supported IC-7300MK2 retains its supported chooser label",
-           chooser && supported >= 0 && !chooser->itemText(supported).contains(QStringLiteral("experimental"), Qt::CaseInsensitive));
+    const auto checkSupported = [&](const QString& address, const QString& model) {
+        const int index = chooser ? chooser->findData(address) : -1;
+        report(qPrintable(model + QStringLiteral(" is selectable with its supported chooser label")),
+               index >= 0 && chooser->itemText(index) == model + QStringLiteral(" — ") + address);
+    };
+    checkSupported(QStringLiteral("A4"), QStringLiteral("IC-705"));
+    checkSupported(QStringLiteral("B6"), QStringLiteral("IC-7300MK2"));
 }
 
 void checkIcomManualGuidanceIsModelNeutral()
@@ -222,6 +226,20 @@ void checkIcomCustomNatPorts()
     report("IC-7110 region is selectable with Icom CI-V Auto-detect",
            civ && civ->currentData().toString() == QStringLiteral("__auto__")
                && market && market->isVisibleTo(&panel));
+    if (civ && market) {
+        // Auto-detect can land on an IC-7110, so it keeps the region row; an
+        // explicit other model or Custom cannot.
+        for (const QString& selection : {QStringLiteral("BA"), QStringLiteral("A4"),
+                                        QStringLiteral("B6"), QStringLiteral("__custom__"),
+                                        QStringLiteral("__auto__"), QStringLiteral("BA")}) {
+            civ->setCurrentIndex(civ->findData(selection));
+            const bool regionApplies = selection == QStringLiteral("BA")
+                || selection == QStringLiteral("__auto__");
+            report(qPrintable(QStringLiteral("IC-7110 region visibility for %1").arg(selection)),
+                   civ->currentData().toString() == selection
+                       && market->isVisibleTo(&panel) == regionApplies);
+        }
+    }
     if (ip && market) {
         ip->setText(QStringLiteral("127.0.0.1"));
         market->setCurrentIndex(market->findData(QStringLiteral("US")));
@@ -245,7 +263,7 @@ void checkIcomCustomNatPorts()
            IcomSettings::serialPort() == 52002);
     report("custom NAT range derives the audio port",
            IcomSettings::audioPort() == 52003);
-    report("Icom Auto-detect saves the IC-7110 region for the requested endpoint",
+    report("Explicit IC-7110 selection saves the region for the requested endpoint",
            IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 52001) == QStringLiteral("US")
                && IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 51001).isEmpty());
 
@@ -265,6 +283,26 @@ void checkIcomCustomNatPorts()
                               .toObject().value(QStringLiteral("icom"))
                               .toObject().value(QStringLiteral("base_port")).toInt();
     report("successful routed profile retains the requested base port", savedBase == 52001);
+
+    if (basePort && civ && market && radioType) {
+        basePort->setValue(52001);
+        report("returning to the IC-7110 endpoint restores its region",
+               market->currentData().toString() == QStringLiteral("US"));
+        market->setCurrentIndex(market->findData(QStringLiteral("EU")));
+        civ->setCurrentIndex(civ->findData(QStringLiteral("A4")));
+        panel.probeRadio(QStringLiteral("127.0.0.1"));
+        report("an explicit other model retains the saved region and ignores a hidden edit",
+               !market->isVisibleTo(&panel)
+                   && IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 52001) == QStringLiteral("US"));
+        civ->setCurrentIndex(civ->findData(QStringLiteral("__auto__")));
+        panel.probeRadio(QStringLiteral("127.0.0.1"));
+        report("Auto-detect saves the region it shows",
+               market->isVisibleTo(&panel)
+                   && IcomSettings::ic7110Market(QStringLiteral("127.0.0.1"), 52001) == QStringLiteral("EU"));
+        civ->setCurrentIndex(civ->findData(QStringLiteral("BA")));
+        radioType->setCurrentIndex(radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyFlex)));
+        report("leaving Icom hides its region row", !market->isVisibleTo(&panel));
+    }
 
     if (hadIcom) {
         settings.setValue(QStringLiteral("Icom"), previousIcom);

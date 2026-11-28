@@ -60,13 +60,10 @@ inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
 {
     const QString normalized = family.trimmed().toLower();
     if (normalized == QLatin1String("icom")) {
-        // The backend derives this canonical model name from the radio's
-        // verified CI-V 19 00 model ID (0xB6). Keep the CI-V byte and its
-        // mapping below the radio seam; the GUI consumes only the normalized
-        // capability identity. Other and unknown Icom models remain
-        // experimental.
-        if (model.trimmed().compare(
-                QLatin1String("IC-7300MK2"), Qt::CaseInsensitive) == 0) {
+        // On connection the backend supplies the model verified by CI-V 19 00.
+        // The chooser uses the same canonical names from the Icom model table.
+        const QString name = model.trimmed().toUpper();
+        if (name == QLatin1String("IC-705") || name == QLatin1String("IC-7300MK2")) {
             return std::nullopt;
         }
         return ExperimentalRadioDescriptor{

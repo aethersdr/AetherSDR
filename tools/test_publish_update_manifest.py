@@ -633,5 +633,192 @@ class LatestPromotion(Base):
         self.assertEqual(m.group(1).strip(), "update-manifest-publish")
 
 
+WORKFLOW = REPO / ".github/workflows/update-manifest.yml"
+ALL_ASSETS = ("AetherSDR-x86_64.AppImage AetherSDR-aarch64.AppImage "
+              "AetherSDR-Windows-x64-portable.zip AetherSDR-x86_64.tar.zst "
+              "AetherSDR-aarch64.tar.zst AetherSDR-macOS-apple-silicon.app.tar.zst "
+              "AetherSDR-macOS-intel.app.tar.zst")
+STUB_GH = r"""#!/usr/bin/env bash
+if [ "$1" = release ]; then printf '%s\n' "$STUB_ASSETS"; exit 0; fi
+if [ "$1" = run ]; then
+  while [ $# -gt 0 ]; do [ "$1" = --workflow ] && wf=$2; shift; done
+  key=$(printf %s "$wf" | tr -c 'A-Za-z0-9' _)
+  if [ -e "$STUB_DIR/fail_$key" ]; then echo "HTTP 503" >&2; exit 1; fi
+  if [ -e "$STUB_DIR/status_$key" ]; then cat "$STUB_DIR/status_$key"; else echo ""; fi
+  exit 0
+fi
+exit 2
+"""
+
+
+def workflow_step_script(name: str) -> str:
+    """The `run: |` body of the build job's step called `name`, dedented."""
+    lines = WORKFLOW.read_text().split("\n")
+    start = lines.index(f"      - name: {name}")
+    run = next(i for i in range(start, len(lines)) if lines[i] == "        run: |")
+    body = []
+    for line in lines[run + 1:]:
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        body.append(line[10:])
+    return "\n".join(body) + "\n"
+
+
+@unittest.skipUnless(shutil.which("bash"), "the workflow step is bash")
+class AssetWait(unittest.TestCase):
+    """The asset-wait step, run as Actions runs it (bash -e -o pipefail)
+    against a stubbed gh and sleep. A build-triggered run defers only to a
+    build known to be in flight, since only that build's completion starts
+    the run that publishes; anything else waits and ends red."""
+
+    def run_step(self, assets: str, statuses: dict[str, str], *, failing=(),
+                 event: str = "workflow_run") -> tuple[int, dict[str, str], str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "gh").write_text(STUB_GH)
+            (d / "sleep").write_text("#!/bin/sh\nexit 0\n")
+            for f in ("gh", "sleep"):
+                (d / f).chmod(0o755)
+            for wf, status in statuses.items():
+                (d / ("status_" + re.sub(r"[^A-Za-z0-9]", "_", wf))).write_text(status + "\n")
+            for wf in failing:
+                (d / ("fail_" + re.sub(r"[^A-Za-z0-9]", "_", wf))).touch()
+            script = d / "step.sh"
+            script.write_text(workflow_step_script("Wait for every payload asset to be attached"))
+            out = d / "output"
+            out.touch()
+            env = dict(os.environ, PATH=f"{d}{os.pathsep}{os.environ['PATH']}",
+                       STUB_DIR=str(d), STUB_ASSETS=assets, GITHUB_OUTPUT=str(out),
+                       TAG="v26.11.4", TARBALLS="true", APP_TARBALLS="true",
+                       EVENT_NAME=event, GH_TOKEN="x", GH_REPO="aethersdr/AetherSDR")
+            p = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+                               env=env, capture_output=True, text=True, timeout=120)
+            outputs = dict(l.split("=", 1) for l in out.read_text().split("\n") if "=" in l)
+            return p.returncode, outputs, p.stdout + p.stderr
+
+    @staticmethod
+    def without(*names: str) -> str:
+        return " ".join(a for a in ALL_ASSETS.split() if not any(a.endswith(n) for n in names))
+
+    def assert_deferred(self, result) -> None:
+        rc, outputs, log = result
+        self.assertEqual(rc, 0, log)
+        self.assertEqual(outputs.get("deferred"), "true", log)
+
+    def assert_red_not_deferred(self, result) -> None:
+        rc, outputs, log = result
+        self.assertNotEqual(rc, 0, log)
+        self.assertNotIn("deferred", outputs, log)
+
+    def test_all_assets_present_builds_with_macos(self) -> None:
+        rc, outputs, log = self.run_step(ALL_ASSETS, {"macOS DMG": "completed"})
+        self.assertEqual(rc, 0, log)
+        self.assertEqual(outputs, {"macos": "true"}, log)
+
+    def test_defers_to_a_build_in_flight(self) -> None:
+        for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+            with self.subTest(status=status):
+                self.assert_deferred(self.run_step(
+                    self.without("portable.zip"),
+                    {"Windows Installer": status, "macOS DMG": "completed"}))
+
+    def test_defers_to_macos_still_running(self) -> None:
+        self.assert_deferred(self.run_step(
+            self.without(".app.tar.zst"), {"macOS DMG": "in_progress"}))
+
+    def test_macos_finished_without_its_tarballs_builds_without_macos(self) -> None:
+        rc, outputs, log = self.run_step(self.without(".app.tar.zst"), {"macOS DMG": "completed"})
+        self.assertEqual(rc, 0, log)
+        self.assertEqual(outputs, {"macos": "false"}, log)
+        self.assertIn("leaves macOS out", log)
+
+    def test_a_finished_build_missing_its_file_ends_red(self) -> None:
+        self.assert_red_not_deferred(self.run_step(
+            self.without("portable.zip"),
+            {"Windows Installer": "completed", "macOS DMG": "completed"}))
+
+    def test_no_run_for_the_tag_does_not_defer(self) -> None:
+        self.assert_red_not_deferred(self.run_step(
+            self.without("portable.zip"), {"macOS DMG": "completed"}))
+
+    def test_a_failed_status_query_does_not_defer(self) -> None:
+        self.assert_red_not_deferred(self.run_step(
+            self.without("portable.zip"), {"macOS DMG": "completed"},
+            failing=("Windows Installer",)))
+
+    def test_a_dispatch_waits_rather_than_defers(self) -> None:
+        self.assert_red_not_deferred(self.run_step(
+            self.without("portable.zip"),
+            {"Windows Installer": "in_progress", "macOS DMG": "completed"},
+            event="workflow_dispatch"))
+
+    def test_every_terminal_build_conclusion_starts_a_build(self) -> None:
+        """A run defers to a build in flight, and that build's completion is
+        the run that publishes, however it ends. A conclusion the build job
+        refuses leaves the deferred runs with no successor and nothing red."""
+        job = WORKFLOW.read_text().split("\n  build:\n", 1)[1].split("\n    runs-on:", 1)[0]
+        m = re.search(r"contains\(fromJSON\('(\[[^\]]*\])'\), github\.event\.workflow_run\.conclusion\)", job)
+        self.assertIsNotNone(m, "the build job filters on the trigger's conclusion")
+        self.assertEqual(set(json.loads(m.group(1))),
+                         {"success", "failure", "cancelled", "timed_out"})
+
+
+class SigningExposure(unittest.TestCase):
+    """What can reach the update-signing environment's secrets."""
+
+    KEY_JOBS = {"update-manifest.yml": "publish", "release-offload.yml": "offload"}
+
+    @staticmethod
+    def environments(text: str) -> list[tuple[str, str]]:
+        """(job, environment value) for every job-level `environment:`."""
+        found, job = [], None
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            m = re.match(r"  ([A-Za-z0-9_-]+):\s*$", line)
+            if m:
+                job = m.group(1)
+            m = re.match(r"\s+environment:\s*(.*?)\s*$", line)
+            if m and not line.lstrip().startswith("#"):
+                value = m.group(1)
+                if not value:  # block form: environment:\n  name: X
+                    value = re.sub(r"^\s*name:\s*", "", lines[i + 1]).strip()
+                found.append((job, value))
+        return found
+
+    def test_only_the_two_key_jobs_use_update_signing(self) -> None:
+        """Any workflow on main may name an environment, and Tier 2 owns
+        .github/workflows/ outside these two files: a new job naming
+        update-signing would reach the update key and the R2 token."""
+        users = []
+        for wf in sorted((REPO / ".github/workflows").glob("*.y*ml")):
+            for job, value in self.environments(wf.read_text()):
+                with self.subTest(workflow=wf.name, job=job):
+                    if "${{" in value:
+                        # A computed name could spell update-signing; only a
+                        # choice between quoted literals is allowed.
+                        self.assertNotRegex(value, r"format\(|join\(|vars\.|inputs\.|env\.|secrets\.|fromJSON",
+                                            "an environment name is a literal")
+                    if "update-signing" in value:
+                        users.append((wf.name, job))
+        self.assertEqual(sorted(users), sorted(self.KEY_JOBS.items()))
+
+    def test_publish_job_runs_no_code_from_the_artifact(self) -> None:
+        """The build job unpacks release payloads, so what it uploads is data
+        only. The publisher beside the key is fetched at the workflow's
+        commit, like the public key."""
+        wf = WORKFLOW.read_text()
+        build, publish = wf.split("\n  build:\n", 1)[1].split("\n  publish:\n", 1)
+        self.assertNotRegex(build, r"cp [^\n]*\.py[^\n]*update-out", "no script rides in the artifact")
+        self.assertNotRegex(publish, r"python3? +\"?update-out/", "nothing in the artifact runs")
+        runs = re.findall(r"python3 +(\S+)", publish)
+        self.assertTrue(runs)
+        self.assertEqual(set(runs), {'"$RUNNER_TEMP/publish_update_manifest.py"'})
+        fetch = re.search(r"for f in ([^;]+); do\n\s+gh api \"repos/\$GH_REPO/contents/\$f\?ref=\$WORKFLOW_SHA\"", publish)
+        self.assertIsNotNone(fetch, "the publish job fetches its code at the workflow's commit")
+        self.assertEqual(set(fetch.group(1).replace("\\", " ").split()),
+                         {"packaging/update-signing.pub", "tools/publish_update_manifest.py",
+                          "tools/build_update_manifest.py"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
