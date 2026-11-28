@@ -26,6 +26,7 @@
 #include "core/AudioEngine.h"
 #include "core/DaxTxAudioPermit.h"
 #include "core/TciServer.h"
+#include "core/backends/sim/SimBackend.h"
 #include "core/LocalVoiceKeyerStore.h"
 #include "core/VoiceKeyerSettings.h"
 #include "core/TxOffDelaySettings.h"
@@ -142,6 +143,26 @@ public:
         client.txProducer = radio.registerTxProducer(&socket);
         server.m_clients.append(std::move(client));
     }
+    // A client whose text goes the production route: onTextMessage -> TciProtocol.
+    static void addTciTextClient(TciServer& server, TciClient& socket, RadioModel& radio)
+    {
+        addTciClient(server, socket, radio);
+        server.clientStateFor(&socket)->protocol =
+            new TciProtocol(&radio, &server.m_routingState, &server.m_trxMap);
+        QObject::connect(&socket, &TciClient::textMessageReceived, &server, &TciServer::onTextMessage);
+        QObject::connect(&socket, &TciClient::disconnected, &server, &TciServer::onClientDisconnected);
+    }
+    static void tciText(TciClient& socket, const QString& text)
+    {
+        emit socket.textMessageReceived(text);
+        for (int i = 0; i < 5; ++i) {
+            QCoreApplication::processEvents();
+        }
+    }
+    static TxCoordinator::Request tciProducerRequest(TciServer& server, TciClient& socket)
+    {
+        return server.clientStateFor(&socket)->txProducer.request();
+    }
     static void addNativeTciClient(TciServer& server, TciClient& socket, RadioModel& radio,
                                    bool activated = true, bool holdText = false)
     {
@@ -219,6 +240,10 @@ public:
     static void discardTciInputs(TciServer& server, TciClient& socket)
     {
         server.clientStateFor(&socket)->txProducer.discardInputs();
+    }
+    static void invalidateTciProducer(TciServer& server, TciClient& socket)
+    {
+        server.clientStateFor(&socket)->txProducer.invalidate();
     }
     static void deferTciRoute(TciServer& server) { server.m_routeTransitionInFlight = true; }
     static void drainTciRoute(TciServer& server)
@@ -4287,6 +4312,153 @@ void tciProducerLifetimes()
           "worker-side input revocation still permits owner-thread PTT cleanup");
 }
 
+// #5873: keyer: reached RadioModel::sendCwKey unbound, in the operator's own
+// CwKey slot, so any TCI client's key-up released the operator's straight key.
+void tciKeyerReleasesOnlyItsOwnKey()
+{
+    Fixture f;
+    TciClient remote;
+    TciClient other;
+    TciServer server(&f.radio);
+    TxOperationIntegrationTestAccess::addTciTextClient(server, remote, f.radio);
+    TxOperationIntegrationTestAccess::addTciTextClient(server, other, f.radio);
+
+    f.radio.sendCwKey(true, QStringLiteral("operator"));
+    check(f.commands == QStringList({"cw:on"}), "fixture: the operator's straight key is down");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(!f.commands.contains("cw:off"), "a TCI client's key-up never releases the operator's key");
+    f.radio.sendCwKey(false, QStringLiteral("operator"));
+    check(f.commands.contains("cw:off"), "the operator's own key-up still releases it");
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "a TCI client keys its own CW");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(other, QStringLiteral("keyer:0,false;"));
+    check(!f.commands.contains("cw:off"), "another TCI client's key-up never releases it");
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(f.commands.contains("cw:off"), "the client's own key-up releases it");
+
+    // Both hold a key: neither client's key-up releases the other's.
+    for (const bool remoteFirst : {true, false}) {
+        TciClient& first = remoteFirst ? remote : other;
+        TciClient& last = remoteFirst ? other : remote;
+        TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+        TxOperationIntegrationTestAccess::tciText(other, QStringLiteral("keyer:0,true;"));
+        f.commands.clear();
+        TxOperationIntegrationTestAccess::tciText(first, QStringLiteral("keyer:0,false;"));
+        check(!f.commands.contains("cw:off"), "with two TCI keys down, the first key-up releases only its own");
+        TxOperationIntegrationTestAccess::tciText(last, QStringLiteral("keyer:0,false;"));
+        check(f.commands.contains("cw:off"), "with two TCI keys down, the last key-up releases the key");
+    }
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client keys again");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,junk;"));
+    check(f.commands.contains("cw:off"), "an unparseable state still means key up (fail closed)");
+
+    // Captured at the input boundary, as trx: is: a key-down whose request is
+    // revoked before the model applies it never keys.
+    f.commands.clear();
+    remote.ingressRequest = TxOperationIntegrationTestAccess::tciProducerRequest(server, remote);
+    emit remote.textMessageReceived(QStringLiteral("keyer:0,true;"));
+    remote.ingressRequest.reset();
+    TxOperationIntegrationTestAccess::discardTciInputs(server, remote);
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(!f.commands.contains("cw:on"), "a key-down revoked before the model applies it never keys");
+
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client's key is down");
+    f.commands.clear();
+    f.radio.sendCwKey(false, QStringLiteral("operator"));
+    check(f.commands.contains("cw:off"), "the operator's own key-up still takes the key up");
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+
+    // On the heap: onClientDisconnected ends in deleteLater().
+    auto* leaving = new TciClient;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, *leaving, f.radio);
+    TxOperationIntegrationTestAccess::tciText(*leaving, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the leaving client's key is down");
+    f.commands.clear();
+    emit leaving->disconnected();
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(f.commands.contains("cw:off"), "a client that disconnects with its key down releases it");
+
+    // A revoked request is still owed its key-up: the key is down on the radio
+    // whether or not the client may keep keying (#6721 review).
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the client's key is down before its input is discarded");
+    TxOperationIntegrationTestAccess::discardTciInputs(server, remote);
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(remote, QStringLiteral("keyer:0,false;"));
+    check(f.commands.contains("cw:off"), "a key-up after the client's inputs were discarded still lifts its key");
+
+    // The I/O worker invalidates the producer before it reports the close.
+    auto* dropped = new TciClient;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, *dropped, f.radio);
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::tciText(*dropped, QStringLiteral("keyer:0,true;"));
+    check(f.commands.contains("cw:on"), "fixture: the dropped client's key is down");
+    TxOperationIntegrationTestAccess::invalidateTciProducer(server, *dropped);
+    f.commands.clear();
+    emit dropped->disconnected();
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(f.commands.contains("cw:off"), "a disconnect after the producer was invalidated still releases the key");
+}
+
+// #6721 review: the Demo backend refuses every key edge, so a TCI key-down
+// becomes a practice sidetone. The client that started it still owns it: only
+// its own key-up or disconnect ends it, never another client's key-up.
+void tciKeyerPracticeToneKeepsItsOwner()
+{
+    RadioModel radio;
+    radio.setBackendForTest(std::make_unique<SimBackend>(), QStringLiteral("sim"));
+    check(!radio.backendCapabilities().canTransmit, "fixture: the Demo backend cannot key");
+    TransmitDelta practice;
+    practice.txSliceMode = QStringLiteral("CW");
+    practice.cwBreakIn = false;
+    practice.cwSidetone = true;
+    radio.transmitModel().applyChanges(practice);
+    QList<bool> edges;
+    QObject::connect(&radio, &RadioModel::cwKeyDownChanged, [&edges](bool down) { edges << down; });
+    TciServer server(&radio);
+    TciClient owner;
+    TciClient other;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, owner, radio);
+    TxOperationIntegrationTestAccess::addTciTextClient(server, other, radio);
+
+    TxOperationIntegrationTestAccess::tciText(owner, QStringLiteral("keyer:0,true;"));
+    check(edges == QList<bool>({true}), "a declined TCI key-down sounds the practice sidetone");
+    TxOperationIntegrationTestAccess::tciText(other, QStringLiteral("keyer:0,false;"));
+    check(edges == QList<bool>({true}), "another TCI client's key-up leaves the practice tone alone");
+    TxOperationIntegrationTestAccess::tciText(owner, QStringLiteral("keyer:0,false;"));
+    check(edges == QList<bool>({true, false}), "the owning client's key-up ends its practice tone");
+    check(!radio.isRadioTransmitting(), "practice keying over TCI never transmits");
+
+    // On the heap: onClientDisconnected ends in deleteLater().
+    auto* leaving = new TciClient;
+    TxOperationIntegrationTestAccess::addTciTextClient(server, *leaving, radio);
+    edges.clear();
+    TxOperationIntegrationTestAccess::tciText(*leaving, QStringLiteral("keyer:0,true;"));
+    check(edges == QList<bool>({true}), "fixture: the leaving client's practice tone is on");
+    emit leaving->disconnected();
+    for (int i = 0; i < 5; ++i) {
+        QCoreApplication::processEvents();
+    }
+    check(edges == QList<bool>({true, false}), "a client that disconnects holding a practice tone ends it");
+}
+
 void tciPermissionRequiresConfirmedOwnership()
 {
     QStringList sent;
@@ -4550,6 +4722,8 @@ int main(int argc, char** argv)
     tciHardwareAndCwIgnoreDaxSelection();
     tciHostModulationIgnoresDaxSelection();
     tciProducerLifetimes();
+    tciKeyerReleasesOnlyItsOwnKey();
+    tciKeyerPracticeToneKeepsItsOwner();
     tciKeepAliveDeadlineUnkeysThroughTheDisconnectPath();
     tciPermissionRequiresConfirmedOwnership();
     tciPromotionRechecksPermissionAfterReply();

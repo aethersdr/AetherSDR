@@ -5853,6 +5853,32 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
+bool RadioModel::refuseRemoteCwKeyDown(const QString& debugSource)
+{
+    if (!m_hostCwText || !m_hostCwText->playing()) {
+        return false;
+    }
+    qCWarning(lcCw).noquote() << "CW key-down refused: host CW text is playing source=" << debugSource;
+    const SliceModel* tx = txSlice();
+    emitInterlockNotification(tr("Remote CW key refused: CW text is playing."),
+                              QStringLiteral("cw-text-remote-key"), tx ? tx->panId() : QString());
+    return true;
+}
+
+bool RadioModel::sendProducerRemoteCwKey(bool down, const QString& debugSource,
+                                         const TxCoordinator::Request& request)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    if (down && refuseRemoteCwKeyDown(debugSource)) {
+        // Closed, as every key-down requestProducerCw() refuses is.
+        (void)m_txCoordinator.closeRequest(request);
+        return false;
+    }
+    return requestProducerCw(request, down, false, true, {}, debugSource);
+}
+
 void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
 {
     if (QThread::currentThread() != thread()) {
@@ -5860,12 +5886,8 @@ void RadioModel::sendRemoteCwKey(bool down, const QString& debugSource)
     }
     // A remote key-down while host CW text plays is refused, never keyed beside
     // it; the key-up of a refused key-down unkeys nothing.
-    if (down && m_hostCwText && m_hostCwText->playing()) {
+    if (down && refuseRemoteCwKeyDown(debugSource)) {
         m_remoteCwKeyRefused = true;
-        qCWarning(lcCw).noquote() << "CW key-down refused: host CW text is playing source=" << debugSource;
-        const SliceModel* tx = txSlice();
-        emitInterlockNotification(tr("Remote CW key refused: CW text is playing."),
-                                  QStringLiteral("cw-text-remote-key"), tx ? tx->panId() : QString());
         return;
     }
     if (std::exchange(m_remoteCwKeyRefused, false) && !down) {
@@ -5971,7 +5993,8 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
         return false;
     }
     // A local operator's key takes over from host text, queued senders included.
-    // A remote key never reaches here while text plays: sendRemoteCwKey() refuses it.
+    // A remote key-down never reaches here while text plays:
+    // sendProducerRemoteCwKey() and sendRemoteCwKey() refuse it.
     if (down && !ptt && !m_hostCwTextEdge && m_hostCwText && m_hostCwText->playing()) {
         m_cwxModel.clearBuffer();
     }

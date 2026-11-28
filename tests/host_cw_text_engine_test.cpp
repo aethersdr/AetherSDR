@@ -17,7 +17,9 @@
 #include "models/TransmitModel.h"
 #include "models/TxController.h"
 #ifdef HAVE_WEBSOCKETS
+#include "core/TciClient.h"
 #include "core/TciProtocol.h"
+#include "core/TciServer.h"
 #endif
 
 #include <QCoreApplication>
@@ -50,6 +52,22 @@ public:
     }
     static void tick(RadioModel& radio) { radio.onTxTimeoutTick(); }
 };
+#ifdef HAVE_WEBSOCKETS
+// A TCI client whose text goes the production route, with no socket and no
+// listener: onTextMessage -> TciProtocol -> this client's TX producer.
+class HostCwTextTciTestAccess {
+public:
+    static void addClient(TciServer& server, TciClient& socket, RadioModel& radio)
+    {
+        TciServer::ClientState client;
+        client.socket = &socket;
+        client.txProducer = radio.registerTxProducer(&socket);
+        client.protocol = new TciProtocol(&radio, &server.m_routingState, &server.m_trxMap);
+        server.m_clients.append(std::move(client));
+        QObject::connect(&socket, &TciClient::textMessageReceived, &server, &TciServer::onTextMessage);
+    }
+};
+#endif
 } // namespace AetherSDR
 
 using namespace AetherSDR;
@@ -804,6 +822,74 @@ void testRemoteKeyDoesNotTakeOver()
     pumpFor(50);
 }
 
+// The same ruling for a remote client with its own TX producer, the route
+// TciServer's keyer takes: nothing keys beside A's text, nothing unkeys it.
+void testProducerRemoteKeyDoesNotTakeOver()
+{
+    Fixture f(hl2Capabilities(true));
+    Sender a(f.radio);
+    const TxCoordinator::Producer client = f.radio.registerTxProducer();
+    const QString source = QStringLiteral("tci:keyer");
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key == QLatin1String("cw-text-remote-key") ? 1 : 0;
+                     });
+    f.radio.transmitModel().setCwSpeed(20);
+    check("producer remote: A plays", a.send(QStringLiteral("MM")));
+    check("producer remote: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    const TxCoordinator::Request refused = client.request();
+    check("producer remote: the key-down is refused", !f.radio.sendProducerRemoteCwKey(true, source, refused));
+    check("producer remote: the refused request is closed", !refused.valid());
+    pumpFor(100);
+    check("producer remote: its key-up releases nothing", !f.radio.sendProducerRemoteCwKey(false, source, refused));
+    check("producer remote: A's text is still playing", f.radio.producerRequestHasWork(a.request));
+    check("producer remote: A's text keys whole and alone",
+          pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000)
+              && f.edges.size() == 8 && alternates(f.edges));
+    std::printf("       %zu edges for MM with a producer's key edge inside it\n", f.edges.size());
+    check("producer remote: one refusal notice", notices == 1);
+    pumpFor(100);
+    const TxCoordinator::Request fresh = client.request();
+    check("producer remote: with no host text playing the key-down is taken",
+          f.radio.sendProducerRemoteCwKey(true, source, fresh));
+    pumpFor(60);
+    check("producer remote: and its key-up", f.radio.sendProducerRemoteCwKey(false, source, fresh));
+    pumpFor(50);
+    check("producer remote: one down and one up", f.edges.size() == 10 && alternates(f.edges) && notices == 1);
+    a.stop();
+    pumpFor(50);
+}
+
+// #5873: with two remote clients, each key-up releases only its own key.
+void testProducerRemoteKeyUpIsOwn()
+{
+    const QString source = QStringLiteral("tci:keyer");
+    for (const bool firstUpFirst : {true, false}) {
+        Fixture f(hl2Capabilities(true));
+        const TxCoordinator::Producer one = f.radio.registerTxProducer();
+        const TxCoordinator::Producer two = f.radio.registerTxProducer();
+        const TxCoordinator::Request a = one.request();
+        const TxCoordinator::Request b = two.request();
+        check("two clients: both key", f.radio.sendProducerRemoteCwKey(true, source, a)
+                                           && f.radio.sendProducerRemoteCwKey(true, source, b));
+        pumpFor(30);
+        (void)f.radio.sendProducerRemoteCwKey(false, source, firstUpFirst ? a : b);
+        pumpFor(30);
+        check("two clients: the first key-up leaves the other's key down",
+              !f.edges.empty() && f.edges.back().down);
+        (void)f.radio.sendProducerRemoteCwKey(false, source, firstUpFirst ? b : a);
+        pumpFor(30);
+        int ups = 0;
+        for (const Edge& e : f.edges) {
+            ups += e.down ? 0 : 1;
+        }
+        check("two clients: the last key-up is the only one keyed",
+              ups == 1 && !f.edges.empty() && !f.edges.back().down);
+    }
+}
+
 // Ruling on #7347: a remote key-up with no accepted remote key-down before it
 // (a stray or unparseable TCI keyer state) does not cut host text's element.
 void testBareRemoteKeyUp()
@@ -966,7 +1052,13 @@ void testTciKeyerIsRemote()
 {
     Fixture f(hl2Capabilities(true));
     Sender a(f.radio);
-    TciProtocol tci(&f.radio);
+    TciClient one;
+    TciClient two;
+    TciServer server(&f.radio);
+    HostCwTextTciTestAccess::addClient(server, one, f.radio);
+    HostCwTextTciTestAccess::addClient(server, two, f.radio);
+    const QString down = QStringLiteral("keyer:0,true;");
+    const QString up = QStringLiteral("keyer:0,false;");
     int notices = 0;
     QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
                      [&](const QString&, const QString& key, const QString&) {
@@ -976,15 +1068,55 @@ void testTciKeyerIsRemote()
     check("tci keyer: A plays", a.send(QStringLiteral("MM")));
     check("tci keyer: A's first key-down", pumpUntil([&] { return !f.edges.empty(); }, 2000));
     pumpFor(20);
-    (void)tci.handleCommand(QStringLiteral("keyer:0,true"));
-    pumpFor(100);
-    (void)tci.handleCommand(QStringLiteral("keyer:0,false"));
+    emit one.textMessageReceived(down);
+    pumpFor(60);
+    emit two.textMessageReceived(up);   // never held: ignored
+    pumpFor(40);
+    emit one.textMessageReceived(up);
     pumpFor(10);
     check("tci keyer: A's text is still playing", f.radio.producerRequestHasWork(a.request));
     check("tci keyer: A's text keys whole and alone",
           pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000)
               && f.edges.size() == 8 && alternates(f.edges));
     check("tci keyer: one refusal notice", notices == 1);
+    pumpFor(100);
+
+    // A refused key-down is not held, whether or not its key-up ever came.
+    check("tci keyer: A plays again", a.send(QStringLiteral("T")));
+    check("tci keyer: A's dah is down", pumpUntil([&] { return f.edges.size() == 9; }, 2000));
+    emit one.textMessageReceived(down);
+    check("tci keyer: A's second text keys whole",
+          pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 3000) && f.edges.size() == 10);
+    pumpFor(100);
+    emit one.textMessageReceived(down);
+    pumpFor(30);
+    check("tci keyer: with no host text playing the client keys", f.edges.size() == 11 && f.edges.back().down);
+    emit two.textMessageReceived(up);
+    pumpFor(30);
+    check("tci keyer: another client's key-up leaves it down", f.edges.size() == 11);
+    check("tci keyer: text sent under the client's key is refused", !a.send(QStringLiteral("E")));
+    emit one.textMessageReceived(up);
+    pumpFor(30);
+    check("tci keyer: its own key-up releases it", f.edges.size() == 12 && alternates(f.edges));
+
+    // The operator took the key up and sends text; the client lets go of its
+    // paddle during the text.
+    emit one.textMessageReceived(down);
+    pumpFor(30);
+    f.radio.sendCwKey(false, QStringLiteral("operator"));
+    pumpFor(30);
+    check("tci keyer: the operator's key-up takes the client's key up",
+          f.edges.size() == 14 && !f.edges.back().down);
+    check("tci keyer: text is admitted after it", a.send(QStringLiteral("T")));
+    check("tci keyer: its dah is down", pumpUntil([&] { return f.edges.size() == 15; }, 2000));
+    pumpFor(40);
+    emit one.textMessageReceived(up);
+    pumpUntil([&] { return !f.radio.producerRequestHasWork(a.request); }, 2000);
+    pumpFor(100);
+    const double dah = f.edges.size() >= 16 ? ms(f.edges[15].at - f.edges[14].at) : 0.0;
+    std::printf("       tci keyer: %zu edges, dah %.1f ms (180 expected)\n", f.edges.size(), dah);
+    check("tci keyer: the client's late key-up does not cut the dah",
+          f.edges.size() == 16 && alternates(f.edges) && dah > 180.0 * 0.85 && dah < 180.0 * 1.3);
     a.stop();
     pumpFor(50);
 }
@@ -1237,6 +1369,8 @@ int main(int argc, char** argv)
     testClearAll();
     testPaddleTakesOver();
     testRemoteKeyDoesNotTakeOver();
+    testProducerRemoteKeyDoesNotTakeOver();
+    testProducerRemoteKeyUpIsOwn();
     testBareRemoteKeyUp();
     testKeyHeldRefusesText();
     testPaddleGapRefusesText();

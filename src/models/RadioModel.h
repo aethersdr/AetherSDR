@@ -1161,7 +1161,15 @@ public:
     int networkMtuSetting() const;
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
-    // A remote client's key edge (TCI keyer): sendCwKey, but it never takes
+    // A remote client's key edge (TCI keyer) through that client's TX request:
+    // requestProducerCw, but a key-down while host CW text plays is refused
+    // with a notice and false. A key-up releases only this request's own key.
+    bool sendProducerRemoteCwKey(bool down, const QString& debugSource,
+                                 const TxCoordinator::Request& request);
+    // A key the radio declined is sounding the local practice sidetone; the
+    // next key-up through sendCwInput() ends it.
+    bool cwPracticeToneOn() const { return m_cwPracticeKeyDown; }
+    // A remote key edge with no request of its own: sendCwKey, but it never takes
     // over from host CW text, which only a local operator input does (#7347 ruling).
     // While host text plays its key-down is refused with a notice, and the
     // matching key-up keys nothing. A remote key-up with no accepted remote
@@ -2614,6 +2622,8 @@ private:
     // in resetTxOperations() while the coordinator can still deliver the key-up.
     std::unique_ptr<HostCwTextEngine> m_hostCwText;
     bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
+    // True, with the notice and the log line, while host CW text plays.
+    bool refuseRemoteCwKeyDown(const QString& debugSource);
     bool m_remoteCwKeyRefused{false};  // a remote key-down was refused; its key-up keys nothing
     bool m_remoteCwKeyDown{false};     // a remote key-down was accepted and is not yet released
     DvkModel         m_dvkModel;
