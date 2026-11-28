@@ -1,5 +1,6 @@
 #include "core/AudioEngine.h"
 #include "core/WsprBeacon.h"
+#include "models/TxTimeoutGuard.h"
 #include "TxTestAuthority.h"
 
 #include <QCoreApplication>
@@ -137,6 +138,25 @@ void testSampleTimingAndTailSilence()
     check(WsprBeacon::isInterlockTimeoutSufficient(0)
               && WsprBeacon::isInterlockTimeoutSufficient(120000),
           "disabled and 120-second radio timeouts allow WSPR");
+
+    // Host transmit time-out (#7459): enabled below 120 s cuts every frame.
+    using Shortfall = WsprBeacon::TimeoutShortfall;
+    check(!WsprBeacon::isHostTimeoutSufficient(true, 60)
+              && !WsprBeacon::isHostTimeoutSufficient(true, 119),
+          "enabled 60 s and 119 s host time-outs are rejected for WSPR");
+    check(WsprBeacon::isHostTimeoutSufficient(true, 120)
+              && WsprBeacon::isHostTimeoutSufficient(true, 180)
+              && WsprBeacon::isHostTimeoutSufficient(false, 15),
+          "120 s, 180 s and a disabled host time-out allow WSPR");
+    check(WsprBeacon::timeoutShortfall(0, true, 60) == Shortfall::Host,
+          "host 60 s refuses on a radio without its own timeout");
+    check(WsprBeacon::timeoutShortfall(20000, true, 60) == Shortfall::Radio,
+          "a short radio timeout is reported before the host one");
+    const AetherSDR::TxTimeoutSettings defaults = AetherSDR::TxTimeoutSettings::defaultsFor(0);
+    check(WsprBeacon::timeoutShortfall(0, defaults.enabled, defaults.timeoutS) == Shortfall::None
+              && WsprBeacon::timeoutShortfall(120000, false, 60) == Shortfall::None,
+          "the default host time-out and a disabled one still start a beacon");
+    static_assert(WsprBeacon::kTransmitDurationMs < WsprBeacon::kMinimumInterlockTimeoutMs);
 
     const WsprBeacon::EncodeResult encoded =
         WsprBeacon::encode(QStringLiteral("K1ABC"),

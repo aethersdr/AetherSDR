@@ -43,6 +43,23 @@ public:
         return timeoutMs == 0 || timeoutMs >= kMinimumInterlockTimeoutMs;
     }
 
+    // The host transmit time-out (RFC #7021, TxTimeoutSettings) stops any over
+    // longer than timeoutS, so a frame needs the same minimum from it.
+    static constexpr bool isHostTimeoutSufficient(bool enabled, int timeoutS)
+    {
+        return !enabled || static_cast<int64_t>(timeoutS) * 1000 >= kMinimumInterlockTimeoutMs;
+    }
+
+    // Which time-out would cut a frame short; the radio's is reported first.
+    enum class TimeoutShortfall { None, Radio, Host };
+    static constexpr TimeoutShortfall timeoutShortfall(int radioTimeoutMs, bool hostEnabled,
+                                                       int hostTimeoutS)
+    {
+        if (!isInterlockTimeoutSufficient(radioTimeoutMs)) { return TimeoutShortfall::Radio; }
+        if (!isHostTimeoutSufficient(hostEnabled, hostTimeoutS)) { return TimeoutShortfall::Host; }
+        return TimeoutShortfall::None;
+    }
+
     using Symbols = std::array<uint8_t, kSymbolCount>;
 
     struct EncodeResult {

@@ -75,6 +75,8 @@ private:
     void stopBeacon(const QString& status,
                     BeaconStopOutcome outcome = BeaconStopOutcome::Interrupted);
     void updateBeaconState();
+    // Empty when neither the radio's nor the host's time-out would cut a frame.
+    QString beaconTimeoutProblem() const;
     void setBeaconStatus(const QString& text, const char* colourToken = "color.accent.warning");
     // Stay armed and roll to the following even UTC minute. Used when the slot
     // boundary was missed, or when the DAX TX stream is still being created.

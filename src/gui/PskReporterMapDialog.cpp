@@ -2092,11 +2092,9 @@ void PskReporterMapDialog::scheduleBeacon(const std::shared_ptr<TxController>& c
         setBeaconStatus(tr("TX slice is locked"));
         return;
     }
-    const int timeoutMs = tx.interlockTimeout();
-    if (!WsprBeacon::isInterlockTimeoutSufficient(timeoutMs)) {
-        setBeaconStatus(
-            tr("Radio TX timeout is %1 s; set Radio Setup → TX → Timeout to at least 120 s")
-                .arg(timeoutMs / 1000));
+    const QString timeoutProblem = beaconTimeoutProblem();
+    if (!timeoutProblem.isEmpty()) {
+        setBeaconStatus(timeoutProblem);
         return;
     }
 
@@ -2147,6 +2145,28 @@ void PskReporterMapDialog::scheduleBeacon(const std::shared_ptr<TxController>& c
     setBeaconControlsEnabled(false);
     m_beaconTimer->start();
     updateBeaconState();
+}
+
+QString PskReporterMapDialog::beaconTimeoutProblem() const
+{
+    if (m_radioModel == nullptr) {
+        return {};
+    }
+    const int radioMs = m_radioModel->transmitModel().interlockTimeout();
+    const TxTimeoutSettings host = m_radioModel->txTimeoutSettings();
+    switch (WsprBeacon::timeoutShortfall(radioMs, host.enabled, host.timeoutS)) {
+    case WsprBeacon::TimeoutShortfall::Radio:
+        return tr("Radio TX timeout is %1 s; set Radio Setup → Transmit → Timeout (sec) "
+                  "to at least 120 s")
+            .arg(radioMs / 1000);
+    case WsprBeacon::TimeoutShortfall::Host:
+        return tr("Transmit time-out is %1 s; set Radio Setup → Transmit → Transmit "
+                  "time-out (this computer) to at least 120 s, or turn it off")
+            .arg(host.timeoutS);
+    case WsprBeacon::TimeoutShortfall::None:
+        break;
+    }
+    return {};
 }
 
 void PskReporterMapDialog::setBeaconStatus(const QString& text, const char* colourToken)
@@ -2300,6 +2320,13 @@ void PskReporterMapDialog::updateBeaconState()
     // decoder holds against the slot edge, wait for the next boundary instead.
     if (nowMs - m_beaconSlotMs > kBeaconMaxSlotLatenessMs) {
         deferBeaconToNextSlot(tr("Re-armed · slot boundary was missed"));
+        return;
+    }
+
+    // Either time-out can change between arming and the slot.
+    const QString timeoutProblem = beaconTimeoutProblem();
+    if (!timeoutProblem.isEmpty()) {
+        stopBeacon(tr("Stopped: %1").arg(timeoutProblem));
         return;
     }
 
