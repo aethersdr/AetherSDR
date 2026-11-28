@@ -43,6 +43,35 @@ public:
         return timeoutMs == 0 || timeoutMs >= kMinimumInterlockTimeoutMs;
     }
 
+    // The host transmit time-out (RFC #7021, TxTimeoutSettings) stops any over
+    // longer than timeoutS, so a frame needs the same minimum from it.
+    static constexpr bool isHostTimeoutSufficient(bool enabled, int timeoutS)
+    {
+        return !enabled || static_cast<int64_t>(timeoutS) * 1000 >= kMinimumInterlockTimeoutMs;
+    }
+
+    // Which time-out would cut a frame short; the radio's is reported first.
+    enum class TimeoutShortfall { None, Radio, Host };
+    static constexpr TimeoutShortfall timeoutShortfall(int radioTimeoutMs, bool hostEnabled,
+                                                       int hostTimeoutS)
+    {
+        if (!isInterlockTimeoutSufficient(radioTimeoutMs)) { return TimeoutShortfall::Radio; }
+        if (!isHostTimeoutSufficient(hostEnabled, hostTimeoutS)) { return TimeoutShortfall::Host; }
+        return TimeoutShortfall::None;
+    }
+
+    // The slot-boundary gate once the stream is ready. A busy transmitter is
+    // waited out first: a refusal restores the borrowed TX filter, which must
+    // not reach the radio during another producer's over.
+    enum class SlotDecision { Key, Defer, StopBusy, StopTimeout };
+    static constexpr SlotDecision slotDecision(bool transmitterBusy, bool deferralsLeft,
+                                               bool timeoutsSufficient)
+    {
+        if (transmitterBusy) { return deferralsLeft ? SlotDecision::Defer : SlotDecision::StopBusy; }
+        if (!timeoutsSufficient) { return SlotDecision::StopTimeout; }
+        return SlotDecision::Key;
+    }
+
     using Symbols = std::array<uint8_t, kSymbolCount>;
 
     struct EncodeResult {

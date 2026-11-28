@@ -2092,11 +2092,9 @@ void PskReporterMapDialog::scheduleBeacon(const std::shared_ptr<TxController>& c
         setBeaconStatus(tr("TX slice is locked"));
         return;
     }
-    const int timeoutMs = tx.interlockTimeout();
-    if (!WsprBeacon::isInterlockTimeoutSufficient(timeoutMs)) {
-        setBeaconStatus(
-            tr("Radio TX timeout is %1 s; set Radio Setup → TX → Timeout to at least 120 s")
-                .arg(timeoutMs / 1000));
+    const QString timeoutProblem = beaconTimeoutProblem();
+    if (!timeoutProblem.isEmpty()) {
+        setBeaconStatus(timeoutProblem);
         return;
     }
 
@@ -2147,6 +2145,28 @@ void PskReporterMapDialog::scheduleBeacon(const std::shared_ptr<TxController>& c
     setBeaconControlsEnabled(false);
     m_beaconTimer->start();
     updateBeaconState();
+}
+
+QString PskReporterMapDialog::beaconTimeoutProblem() const
+{
+    if (m_radioModel == nullptr) {
+        return {};
+    }
+    const int radioMs = m_radioModel->transmitModel().interlockTimeout();
+    const TxTimeoutSettings host = m_radioModel->txTimeoutSettings();
+    switch (WsprBeacon::timeoutShortfall(radioMs, host.enabled, host.timeoutS)) {
+    case WsprBeacon::TimeoutShortfall::Radio:
+        return tr("Radio TX timeout is %1 s; set Radio Setup → Transmit → Timeout (sec) "
+                  "to at least 120 s")
+            .arg(radioMs / 1000);
+    case WsprBeacon::TimeoutShortfall::Host:
+        return tr("Transmit time-out is %1 s; set Radio Setup → Transmit → Transmit "
+                  "time-out (this computer) to at least 120 s, or turn it off")
+            .arg(host.timeoutS);
+    case WsprBeacon::TimeoutShortfall::None:
+        break;
+    }
+    return {};
 }
 
 void PskReporterMapDialog::setBeaconStatus(const QString& text, const char* colourToken)
@@ -2333,14 +2353,26 @@ void PskReporterMapDialog::updateBeaconState()
     // Checked here as well as inside reassertBeaconChannel() because only this
     // caller knows a busy transmitter is worth waiting out, where a slice that
     // moved band is not.
-    if (m_radioModel->transmitModel().isTransmitting()
-        || m_radioModel->transmitModel().isTuning()) {
-        if (m_beaconDeferrals >= kBeaconMaxDeferrals) {
-            stopBeacon(tr("Stopped: transmitter is in use"));
-            return;
-        }
+    //
+    // Either time-out can change between arming and the slot. It is re-checked
+    // only once the transmitter is idle: the refusal restores the borrowed TX
+    // filter, which must not reach the radio during another producer's over.
+    const bool transmitterBusy = m_radioModel->transmitModel().isTransmitting()
+        || m_radioModel->transmitModel().isTuning();
+    const QString timeoutProblem = transmitterBusy ? QString() : beaconTimeoutProblem();
+    switch (WsprBeacon::slotDecision(transmitterBusy, m_beaconDeferrals < kBeaconMaxDeferrals,
+                                     timeoutProblem.isEmpty())) {
+    case WsprBeacon::SlotDecision::StopBusy:
+        stopBeacon(tr("Stopped: transmitter is in use"));
+        return;
+    case WsprBeacon::SlotDecision::Defer:
         deferBeaconToNextSlot(tr("Re-armed · transmitter is in use"));
         return;
+    case WsprBeacon::SlotDecision::StopTimeout:
+        stopBeacon(tr("Stopped: %1").arg(timeoutProblem));
+        return;
+    case WsprBeacon::SlotDecision::Key:
+        break;
     }
 
     // Last look at the channel before the key. See reassertBeaconChannel().

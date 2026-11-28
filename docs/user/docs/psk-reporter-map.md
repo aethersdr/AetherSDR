@@ -112,7 +112,7 @@ The **WSPR beacon** group sends a single WSPR transmission.
 
 **Transmit once** arms one transmission for the next even UTC minute; it does not repeat. The button becomes **Cancel** while armed. The status line shows progress, then **Complete**.
 
-The beacon refuses to start when RADE is active, the radio cannot transmit, the transmitter is already in use, there is no TX slice or the TX slice is locked. It unkeys if the audio stream is lost, you close the window or you press Cancel.
+The beacon refuses to start when RADE is active, the radio cannot transmit, the transmitter is already in use, there is no TX slice or the TX slice is locked. It also refuses when either time-out is shorter than a WSPR frame (about 112 s): the radio's **Timeout (sec):**, or the [transmit time-out](./tx-controls.md#transmit-time-out) on this computer, if it is on. Both must be at least 120 s, and the beacon checks them again just before it keys. At 120 s with the default 10 s warning, the time-out notice and beep come shortly before the frame ends; the beacon unkeys before the stop. It unkeys if the audio stream is lost, you close the window or you press Cancel.
 
 ## Reference
 
@@ -124,11 +124,12 @@ All map choices (callsign, filters, layers, weather sources, playback history an
 
 ### The WSPR beacon won't start
 
-The beacon refuses to start when RADE is active, the radio cannot transmit, the transmitter is already in use, there is no TX slice or the TX slice is locked.
+The beacon refuses to start when RADE is active, the radio cannot transmit, the transmitter is already in use, there is no TX slice, the TX slice is locked, or a time-out is shorter than 120 s.
 
 1. Turn RADE off if it is active.
 2. Make sure a slice holds TX and is not locked.
-3. Wait until nothing else is transmitting, then press **Transmit once** again.
+3. In **Radio Setup → Transmit**, set **Timeout (sec):** and **Stop transmitting after** to at least 120 s, or turn the transmit time-out off.
+4. Wait until nothing else is transmitting, then press **Transmit once** again.
 
 ### The weather overlay is missing or out of date
 
