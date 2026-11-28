@@ -198,6 +198,58 @@ geometry change.
 formula (code), any parameters (JSON), the fit tool, this document, and the
 tests all agree in the same change.
 
+### D4 — The range follows measured forward power (#6433)
+**Status: ADOPTED.** Implemented by `CrossNeedleRangeSelector`; the ladder is
+`range.multipliers` in the JSON.
+
+**The problem D1 creates.** Every range multiplies both movements by the same
+factor, so the contours are exact on all of them (§1). But D1 hides the
+contours' convergence under the mask, so the crossing is only readable when
+the forward needle is well up its scale. Below about half scale, low-SWR
+crossings sit under the mask (crossing height above the mask, design px):
+
+| Forward, % of range | SWR 1.1 | 1.2 | 1.35 | 1.5 |
+|---|---|---|---|---|
+| 30 % | −29 | −23 | −8 | +9 |
+| 36 % | −23 | −15 | +3 | +26 |
+| 50 % | −14 | −1 | +29 | +65 |
+
+The old selection fixed one range per radio from its maximum power (×1 / ×10 /
+×100). A 500 W radio got the 2 kW face, where 150 W is 16 % of the scale and a
+SWR 1.35 crossing lies 68 px under the mask: the reflected needle looked dead
+and there was no SWR to read. A 100 W radio below about half power had the
+same problem on its 200 W face.
+
+**The decision.** Do what a hardware cross-needle meter's range switch does,
+from the measured forward power:
+
+- **Ladder 1-2-5 plus a 600 W step**, 20 W to 2 kW forward. No step is wider
+  than 2.5×, so a settled forward needle sits at or above 0.90 / 2.5 = 36 % of
+  full scale, where SWR 1.35 still clears the mask. A 1-3-10 ladder settles as
+  low as 27 %, where it does not. The 600 W step gives a 500 W radio a top range
+  it fills to 83 % at full power, where even SWR 1.2 reads; on a 1 kW top range
+  (50 %) it would not.
+- **Ceiling**: the smallest range that holds the meter source's maximum below
+  95 % of full scale (100 W radio → 200 W; 500 W radio or KPA500 → 600 W), or
+  2 kW while a PGXL in OPERATE feeds the meter.
+- **Up-range at once** above 95 % of full scale (a needle on its end stop reads
+  nothing); **down-range** after forward has stayed at or below 90 % of a lower
+  range for 1.5 s. The gap prevents hunting on a steady carrier; the hold time
+  keeps SSB peaks from hunting. Samples under 0.5 W carry no information and
+  neither start nor end a hold. Unkey keeps the range.
+- **The face prints the active range's watts** on both scales and in the RANGE
+  legend, so nothing has to be multiplied in the head. The JSON `labels` stay
+  the ×1 face; wider numbers shrink, then the lowest-priority ones drop, so no
+  neighbour pair overlaps more than it does at ×1.
+
+Very low SWR (below about 1.2) stays under the mask unless the forward needle
+is near full scale. That is the hardware meter's dead zone near the pivot too,
+and D1 deliberately accepts it.
+
+The tests pin the policy and its purpose: a forward sweep from 18 W to 1.9 kW,
+approached from above and below, must settle at or above 36 % of full scale
+with the SWR 1.5 and 1.35 crossings above the mask.
+
 ---
 
 ## 7. Changing the model safely — checklist
@@ -216,6 +268,13 @@ tests all agree in the same change.
 
 ## 8. Changelog
 
+- **design_version 20 — range follows forward power (D4, #6433).**
+  `range.multipliers` became the ladder the range switch walks (1-2-5 plus a
+  600 W step), and the
+  authored `range.label` was removed: the RANGE legend and both scales' numbers
+  are now printed for the active range. No movement, contour or mask geometry
+  changed, and `format_version` stays 6 (a format-6 file with the old
+  three-step ladder still loads and ranges on it).
 - **design_version 19 — consistent fan: all contours terminate on a common
   boundary.** Every contour now sweeps until its crossing reaches one shared
   envelope a fixed `graph_clearance` short of whichever power arc is nearer, so

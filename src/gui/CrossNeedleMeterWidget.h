@@ -2,6 +2,7 @@
 
 #include "AnalogMeterFaceTheme.h"
 #include "CrossNeedleMeterGeometry.h"
+#include "CrossNeedleRangeSelector.h"
 #include "MeterSmoother.h"
 
 #include <QElapsedTimer>
@@ -42,6 +43,9 @@ class CrossNeedleMeterWidget : public QWidget {
     double reflectedWatts() const { return m_reflectedWatts; }
     double swr() const { return m_swr; }
     double rangeMultiplier() const { return m_rangeMultiplier; }
+    double rangeCeilingMultiplier() const { return m_rangeSelector.ceilingMultiplier(); }
+    bool rangeHoldPending() const { return m_rangeSelector.holdPending(); }
+    bool rangeHoldTimerActive() const { return m_rangeHoldTimer.isActive(); }
     bool isTransmitting() const { return m_transmitting; }
     bool reflectedPowerMeasured() const { return m_reflectedPowerMeasured; }
     bool rangeLegendVisible() const { return m_rangeLegendVisible; }
@@ -73,6 +77,7 @@ class CrossNeedleMeterWidget : public QWidget {
   private slots:
     void advanceNeedles();
     void publishAccessibleValue();
+    void completeRangeHold();
 
   private:
     QRectF fittedDesignRect() const;
@@ -92,6 +97,12 @@ class CrossNeedleMeterWidget : public QWidget {
     void drawRotatedText(QPainter &painter, const QPointF &center, const QString &text,
                          double degrees) const;
     void updateTargets(bool snap);
+    // Feeds the live forward power to the range switch while transmitting.
+    // Returns true when the active range changed.
+    bool observeRange();
+    void scheduleRangeHold();
+    // Adopts the selector's range: reprints the face and snaps the needles.
+    void applyRangeChange();
     void scheduleAccessibleValue();
     void publishAutomationProperties();
 
@@ -102,6 +113,11 @@ class CrossNeedleMeterWidget : public QWidget {
     QTimer m_animationTimer;
     QElapsedTimer m_animationClock;
     QTimer m_accessibilityTimer;
+    CrossNeedleRangeSelector m_rangeSelector;
+    QElapsedTimer m_rangeClock;
+    // Completes a pending down-range when no further meter sample arrives
+    // (a steady carrier on a radio that reports only changes, or a fixture).
+    QTimer m_rangeHoldTimer;
 
     QPixmap m_staticLayer;
     QSize m_cacheSize;

@@ -308,9 +308,12 @@ class CrossNeedleMeterGeometry {
     Title reflectedTitle;
     QPointF forwardUnitCenter{435.0, 110.0};
     QPointF reflectedUnitCenter{1065.0, 110.0};
-    QString rangeLabel;
     QPointF rangeLabelCenter{1245.0, 82.0};
-    QVector<double> rangeMultipliers{1.0, 10.0, 100.0};
+    // Range-switch ladder (#6433). Each range scales BOTH printed scales by
+    // the same multiplier, so the SWR contours are exact on every range. The
+    // ladder's widest step (2.5x) bounds how low a settled forward needle can
+    // sit; see CrossNeedleRangeSelector.
+    QVector<double> rangeMultipliers{1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0};
     ScaleOverlap scaleOverlap;
     SwrStyle swrStyle;
     QVector<SwrGuide> swrGuides;
@@ -341,8 +344,39 @@ class CrossNeedleMeterGeometry {
 
     static double reflectedPowerWatts(double forwardWatts, double swr);
     static double swrFromPowers(double forwardWatts, double reflectedWatts);
-    static double rangeMultiplierFor(int maxWatts, bool amplifierActive);
     static double printedAngleForIndex(const Scale &scale, int index);
+
+    // Printed full scale of each movement on a range.
+    double forwardFullScaleWatts(double rangeMultiplier) const;
+    double reflectedFullScaleWatts(double rangeMultiplier) const;
+    // The number printed at tick `index` on a range, or empty where the face
+    // leaves that tick unnumbered.
+    static QString scaleLabelText(const Scale &scale, int index, double rangeMultiplier);
+    // The face's RANGE legend for the active range: forward then reflected
+    // full scale.
+    QString rangeLegendText(double rangeMultiplier) const;
+    static QString formatWatts(double watts);
+
+    // Printed scale numbers for a range, in design coordinates. Larger ranges
+    // print wider numbers than the authored 0-20 / 0-4 face: the layout first
+    // shrinks a scale's numbers (down to kMinimumScaleNumberFraction of the
+    // authored size) until neighbours clear each other, then drops the
+    // lowest-priority numbers. Priority: full scale, zero, half, quarter and
+    // tenth scale, then the rest — so round values survive on every range.
+    // "Clear" means no neighbour pair's text boxes overlap more than the same
+    // pair's do on the approved x1 face, which therefore lays out unchanged.
+    struct ScaleNumber {
+        QPointF center;
+        QString text;
+    };
+    struct ScaleNumberLayout {
+        int pixelSize{0};
+        QVector<ScaleNumber> numbers; // in tick order
+    };
+    static constexpr double kMinimumScaleNumberFraction = 0.72;
+    // `font` supplies family and weight; its size is ignored.
+    ScaleNumberLayout scaleNumberLayout(const Scale &scale, double rangeMultiplier,
+                                        QFont font) const;
 
   private:
     static double inverseInterpolate(const Scale &scale, double angleRadians);

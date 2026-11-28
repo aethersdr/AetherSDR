@@ -4,6 +4,7 @@
 #include <QFont>
 #include <QFontMetricsF>
 #include <QGuiApplication>
+#include <QHash>
 #include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -406,7 +407,6 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
 
     const QJsonObject range = root.value(QStringLiteral("range")).toObject();
     geometry.rangeMultipliers = readDoubles(range.value(QStringLiteral("multipliers")));
-    geometry.rangeLabel = range.value(QStringLiteral("label")).toString();
     geometry.rangeLabelCenter =
         readPoint(range.value(QStringLiteral("label_center")), geometry.rangeLabelCenter);
 
@@ -563,8 +563,7 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
 CrossNeedleMeterGeometry CrossNeedleMeterGeometry::fallback() {
     CrossNeedleMeterGeometry geometry;
     geometry.formatVersion = 6;
-    geometry.designVersion = 19;
-    geometry.rangeLabel = QStringLiteral("RANGE  20 W x1   200 W x10   2 kW x100");
+    geometry.designVersion = 20;
     geometry.forwardTitle = {QStringLiteral("FORWARD"), QPointF(180.0, 545.0), -58.0};
     geometry.reflectedTitle = {QStringLiteral("REFLECTED"), QPointF(1320.0, 545.0), 58.0};
     geometry.forwardScale.center = QPointF(1099.0, 1057.0);
@@ -680,6 +679,13 @@ bool CrossNeedleMeterGeometry::isValid(QString *error) const {
         !positiveFinite(scaleStyle.innerWidth) || !positiveFinite(scaleStyle.majorTickWidth) ||
         !positiveFinite(scaleStyle.minorTickWidth)) {
         return fail(QStringLiteral("cross-needle scale style is invalid"));
+    }
+    if (rangeMultipliers.isEmpty() ||
+        !std::all_of(rangeMultipliers.cbegin(), rangeMultipliers.cend(), positiveFinite) ||
+        !std::is_sorted(rangeMultipliers.cbegin(), rangeMultipliers.cend()) ||
+        std::adjacent_find(rangeMultipliers.cbegin(), rangeMultipliers.cend()) !=
+            rangeMultipliers.cend()) {
+        return fail(QStringLiteral("cross-needle range ladder must be positive and ascending"));
     }
     if (typography.scaleNumberPixels <= 0 || typography.sideTitlePixels <= 0 ||
         typography.rangePixels <= 0 || typography.unitPixels <= 0 ||
@@ -1390,14 +1396,199 @@ double CrossNeedleMeterGeometry::swrFromPowers(double forwardWatts, double refle
     return (1.0 + rho) / (1.0 - rho);
 }
 
-double CrossNeedleMeterGeometry::rangeMultiplierFor(int maxWatts, bool amplifierActive) {
-    if (amplifierActive || maxWatts > 200) {
-        return 100.0;
+double CrossNeedleMeterGeometry::forwardFullScaleWatts(double rangeMultiplier) const {
+    return (forwardScale.values.isEmpty() ? 0.0 : forwardScale.values.last()) * rangeMultiplier;
+}
+
+double CrossNeedleMeterGeometry::reflectedFullScaleWatts(double rangeMultiplier) const {
+    return (reflectedScale.values.isEmpty() ? 0.0 : reflectedScale.values.last()) *
+           rangeMultiplier;
+}
+
+QString CrossNeedleMeterGeometry::formatWatts(double watts) {
+    // 'g' with six significant digits strips the binary noise of products
+    // such as 0.6 x 2 while printing integers without a decimal point.
+    return QString::number(watts, 'g', 6);
+}
+
+QString CrossNeedleMeterGeometry::scaleLabelText(const Scale &scale, int index,
+                                                 double rangeMultiplier) {
+    if (index < 0 || index >= scale.labels.size() || index >= scale.values.size() ||
+        scale.labels[index].isEmpty()) {
+        return {};
     }
-    if (maxWatts > 20) {
-        return 10.0;
+    // The printed face carries the active range's watts (#6433). An empty
+    // authored label marks a tick the face never numbers, on every range.
+    return formatWatts(scale.values[index] * rangeMultiplier);
+}
+
+namespace {
+
+// How far two printed numbers' text boxes overlap, measured as the shallower
+// of the two axis penetrations (0 when they are apart).
+double boxPenetration(const QRectF &a, const QRectF &b) {
+    const QRectF overlap = a.intersected(b);
+    return overlap.isEmpty() ? 0.0 : std::min(overlap.width(), overlap.height());
+}
+
+} // namespace
+
+CrossNeedleMeterGeometry::ScaleNumberLayout
+CrossNeedleMeterGeometry::scaleNumberLayout(const Scale &scale, double rangeMultiplier,
+                                            QFont font) const {
+    struct Candidate {
+        int index;
+        QPointF center;
+        QString text;
+        int priority;
+    };
+    const double fullScaleValue = scale.values.isEmpty() ? 0.0 : scale.values.last();
+    const auto multipleOf = [](double value, double step) {
+        if (!(step > 0.0)) {
+            return false;
+        }
+        const double ratio = value / step;
+        return std::abs(ratio - std::round(ratio)) < 1e-6;
+    };
+    const int ticks = static_cast<int>(scale.anglesRadians.size());
+    const auto centerFor = [&scale](int index) {
+        const double angle = printedAngleForIndex(scale, index);
+        return scale.center +
+               QPointF(std::cos(angle), std::sin(angle)) * (scale.radius + scale.labelOffset);
+    };
+    QVector<Candidate> candidates;
+    for (int i = 0; i < ticks; ++i) {
+        const QString text = scaleLabelText(scale, i, rangeMultiplier);
+        if (text.isEmpty()) {
+            continue;
+        }
+        const double value = scale.values.value(i);
+        int priority = 5;
+        if (i + 1 == ticks) {
+            priority = 0;
+        } else if (i == 0) {
+            priority = 1;
+        } else if (multipleOf(value, fullScaleValue / 2.0)) {
+            priority = 2;
+        } else if (multipleOf(value, fullScaleValue / 4.0)) {
+            priority = 3;
+        } else if (multipleOf(value, fullScaleValue / 10.0)) {
+            priority = 4;
+        }
+        candidates.append({i, centerFor(i), text, priority});
     }
-    return 1.0;
+
+    const auto boxFor = [](const QFontMetricsF &metrics, const QPointF &center,
+                           const QString &text) {
+        QRectF box = metrics.tightBoundingRect(text);
+        box.moveCenter(center);
+        return box;
+    };
+
+    // The approved x1 face is the legibility reference. Numbers along an arc
+    // sit diagonally to their neighbours, and on that face some neighbours'
+    // text boxes already touch at the corners (9/10, 3.6/4) while the glyphs
+    // stay clear. Each authored neighbour pair may therefore overlap as much
+    // as it does there and no more; every other pair not at all. (Glyph
+    // outlines would be more exact, but QPainterPath::addText yields plain em
+    // boxes on some platforms and fonts.)
+    QHash<int, double> allowance; // keyed by the lower tick index of a pair
+    {
+        QFont authored = font;
+        authored.setPixelSize(typography.scaleNumberPixels);
+        const QFontMetricsF metrics(authored);
+        int previous = -1;
+        for (int i = 0; i < ticks && i < scale.labels.size(); ++i) {
+            if (scale.labels[i].isEmpty()) {
+                continue;
+            }
+            if (previous >= 0) {
+                allowance.insert(previous,
+                                 boxPenetration(boxFor(metrics, centerFor(previous),
+                                                       scale.labels[previous]),
+                                                boxFor(metrics, centerFor(i), scale.labels[i])));
+            }
+            previous = i;
+        }
+    }
+    const auto allowed = [&allowance, &scale](int first, int second) {
+        // Only a pair that is adjacent on the authored face carries an
+        // allowance; a pair brought together by a dropped number does not.
+        const int low = std::min(first, second);
+        const int high = std::max(first, second);
+        for (int i = low + 1; i < high && i < scale.labels.size(); ++i) {
+            if (!scale.labels[i].isEmpty()) {
+                return 0.0;
+            }
+        }
+        return allowance.value(low, 0.0);
+    };
+    constexpr double kTolerance = 0.25;
+    const auto collide = [&allowed](const QRectF &a, int ia, const QRectF &b, int ib) {
+        return boxPenetration(a, b) > allowed(ia, ib) + kTolerance;
+    };
+    const auto anyCollision = [&](const QFontMetricsF &metrics) {
+        for (int i = 1; i < candidates.size(); ++i) {
+            const Candidate &a = candidates[i - 1];
+            const Candidate &b = candidates[i];
+            if (collide(boxFor(metrics, a.center, a.text), a.index,
+                        boxFor(metrics, b.center, b.text), b.index)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const int authoredPixels = typography.scaleNumberPixels;
+    const int minimumPixels = std::max(
+        1, static_cast<int>(std::ceil(authoredPixels * kMinimumScaleNumberFraction)));
+    int pixels = authoredPixels;
+    for (; pixels > minimumPixels; --pixels) {
+        font.setPixelSize(pixels);
+        if (!anyCollision(QFontMetricsF(font))) {
+            break;
+        }
+    }
+    font.setPixelSize(pixels);
+    const QFontMetricsF metrics(font);
+
+    QVector<Candidate> byPriority = candidates;
+    std::stable_sort(byPriority.begin(), byPriority.end(),
+                     [](const Candidate &a, const Candidate &b) { return a.priority < b.priority; });
+    QVector<QPair<int, QRectF>> placed;
+    for (const Candidate &candidate : byPriority) {
+        const QRectF box = boxFor(metrics, candidate.center, candidate.text);
+        const bool clear = std::none_of(
+            placed.cbegin(), placed.cend(), [&](const QPair<int, QRectF> &other) {
+                return collide(other.second, other.first, box, candidate.index);
+            });
+        if (clear) {
+            placed.append({candidate.index, box});
+        }
+    }
+
+    ScaleNumberLayout layout;
+    layout.pixelSize = pixels;
+    for (const Candidate &candidate : candidates) {
+        const bool kept = std::any_of(placed.cbegin(), placed.cend(),
+                                      [&candidate](const QPair<int, QRectF> &other) {
+                                          return other.first == candidate.index;
+                                      });
+        if (kept) {
+            layout.numbers.append({candidate.center, candidate.text});
+        }
+    }
+    return layout;
+}
+
+QString CrossNeedleMeterGeometry::rangeLegendText(double rangeMultiplier) const {
+    const auto fullScale = [](double watts) {
+        return watts >= 1000.0 ? formatWatts(watts / 1000.0) + QStringLiteral(" kW")
+                               : formatWatts(watts) + QStringLiteral(" W");
+    };
+    return QStringLiteral("RANGE\n%1\n%2")
+        .arg(fullScale(forwardFullScaleWatts(rangeMultiplier)),
+             fullScale(reflectedFullScaleWatts(rangeMultiplier)));
 }
 
 } // namespace AetherSDR

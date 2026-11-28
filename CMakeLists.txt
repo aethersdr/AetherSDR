@@ -1570,6 +1570,7 @@ set(GUI_SOURCES
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
+    src/gui/CrossNeedleRangeSelector.cpp
     src/gui/CrossNeedleMeterApplet.cpp
     src/gui/CrossNeedleMeterSettings.cpp
     src/gui/VuMeterSettings.cpp
