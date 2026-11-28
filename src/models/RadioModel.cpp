@@ -4883,12 +4883,12 @@ QList<int> RadioModel::radioFilterWidthsHz() const
     return backendCapabilities().rxFilterWidthsHz;
 }
 
-RxFilterControl RadioModel::radioFilterControl() const
+RxFilterControl RadioModel::radioFilterControl(int sliceId) const
 {
     if (!m_backend || !isConnected()) {
         return {};
     }
-    return backendCapabilities().rxFilterControl;
+    return backendCapabilities().filterControlForSlice(sliceId);
 }
 
 void RadioModel::selectRadioFilterPreset(int sliceId, int presetId)
@@ -4896,7 +4896,7 @@ void RadioModel::selectRadioFilterPreset(int sliceId, int presetId)
     if (!m_backend || !isConnected()) {
         return;
     }
-    const RxFilterControl control = backendCapabilities().rxFilterControl;
+    const RxFilterControl control = radioFilterControl(sliceId);
     const bool declared = std::any_of(
         control.presets.cbegin(), control.presets.cend(),
         [presetId](const RxFilterPreset& preset) { return preset.id == presetId; });

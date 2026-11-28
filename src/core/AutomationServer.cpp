@@ -6530,7 +6530,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices())
-            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl()));
+            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl(s->sliceId())));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slices"), arr}};
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
@@ -6609,7 +6609,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         if (!s)
             return err(QStringLiteral("no slice for selector '") + selector + QStringLiteral("'"));
-        data = sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl());
+        data = sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl(s->sliceId()));
     } else if (model == QLatin1String("pan")) {
         const PanadapterModel* p = nullptr;
         if (selector.isEmpty() || selector == QLatin1String("active"))

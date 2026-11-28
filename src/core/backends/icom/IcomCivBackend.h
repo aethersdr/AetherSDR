@@ -80,6 +80,7 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void setSliceMode(int sliceId, const QString& mode) override;
+    void requestSliceFilter(int receiver, const SliceFilterRequest& request) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceFilterPreset(int sliceId, int presetId) override;
     void setTxFilter(int lowHz, int highHz) override;
@@ -228,6 +229,7 @@ private:
     // The mode name the FILTER LADDER is keyed on. Differs from the neutral one
     // only where a radio mode has no neutral equivalent but does have its own
     // IF widths — RTTY today. See the definition.
+    static std::string filterMode(CivMode mode, bool data);
     QString currentLadderMode() const;
     // Re-read the three things that define the passband — the IF width
     // (1A 03) and both Twin PBT positions (14 07 / 14 08).
@@ -381,7 +383,11 @@ private:
     void publishDualReceiver(int receiver);
     void syncDualTransmit();
     void writeDualMode(int receiver, CivMode mode, std::uint8_t data, int filter);
-    std::vector<std::uint8_t> receiverCommand(const std::vector<std::uint8_t>& frame) const;
+    std::vector<std::uint8_t> receiverCommand(const std::vector<std::uint8_t>& frame,
+                                               std::uint8_t receiver = 0) const;
+    void requestDualPassband(int receiver);
+    void invalidateDualPassband(int receiver);
+    bool handleDualPassband(const CivFrame& frame);
     std::optional<ModulationProfile> currentModulationProfile() const;
     void onDualAudio(const std::vector<float>& interleaved);
     void publishDualPan(int receiver);
@@ -397,6 +403,12 @@ private:
         std::uint8_t data = 0;
         int filter = 1;
         bool modeKnown = false;
+        bool modeWritePending = false;
+        std::array<int, 3> slotWidths{};
+        int widthHz = 0;
+        int pbtInner = kPbtCentreCode;
+        int pbtOuter = kPbtCentreCode;
+        qint64 nextPassbandReadMs = 0;
         int monitorGain = 100;
         int monitorPan = 50;
         bool monitorMute = false;

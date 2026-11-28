@@ -182,17 +182,17 @@ std::optional<ModulationProfile> IcomCivBackend::currentModulationProfile() cons
 }
 
 std::vector<std::uint8_t> IcomCivBackend::receiverCommand(
-    const std::vector<std::uint8_t>& frame) const
+    const std::vector<std::uint8_t>& frame, std::uint8_t receiver) const
 {
     if (!hasDualReceivers()) { return frame; }
     const auto parsed = parseFrame(frame);
     if (!parsed) { return frame; }
     const std::uint8_t address = frame[2];
     if (parsed->cmd == cmd::kReadFreq) {
-        return buildFrameSub(address, 0x25, 0);
+        return buildFrameSub(address, 0x25, receiver);
     }
     if (parsed->cmd == cmd::kReadMode) {
-        return buildFrameSub(address, 0x26, 0);
+        return buildFrameSub(address, 0x26, receiver);
     }
     // Shared subset of the model guides' 29 marks; TX controls are global.
     // In particular 14 0A/0B/0C/0E and 16 44/45/46/47 must stay unwrapped.
@@ -205,7 +205,7 @@ std::vector<std::uint8_t> IcomCivBackend::receiverCommand(
         || (parsed->cmd == cmd::kFunction && listed(parsed->sub, {0x02,0x12,0x22,0x40,0x41,0x48,0x57}))
         || (parsed->cmd == cmd::kSetting && listed(parsed->sub, {0x03,0x04})));
     if (addressed) {
-        return buildFrameSub(address, 0x29, 0,
+        return buildFrameSub(address, 0x29, receiver,
             std::span<const std::uint8_t>(frame).subspan(4, frame.size() - 5));
     }
     return frame;
@@ -250,6 +250,7 @@ void IcomCivBackend::pollDualReceivers()
     for (std::uint8_t receiver : {0, 1}) {
         read(buildFrameSub(address, 0x25, receiver));
         read(buildFrameSub(address, 0x26, receiver));
+        requestDualPassband(receiver);
         read(cmdReadScopeEdgeNumber(address, receiver));
         read(cmdReadScopeMode(address, receiver));
         const auto reference = buildFrameSub(address, cmd::kScope, scope::kReference,
@@ -282,6 +283,79 @@ void IcomCivBackend::pollDualReceivers()
     }
 }
 
+void IcomCivBackend::requestDualPassband(int receiver)
+{
+    ReceiverState& state = m_receivers[receiver];
+    if (!m_session || !state.modeKnown || state.modeWritePending || nowMs() < state.nextPassbandReadMs
+        || filterWidthLimitsFor(filterMode(state.mode, state.data != 0)).maxHz == 0) {
+        return;
+    }
+    // Panel width and PBT changes need reconciliation even when the slot stays selected.
+    const auto priority = state.nextPassbandReadMs == 0 ? IcomCivScheduler::Priority::Operator
+                                                       : IcomCivScheduler::Priority::Maintenance;
+    state.nextPassbandReadMs = nowMs() + 1500;
+    const auto address = m_session->civAddress();
+    for (const auto& command : {cmdReadFilterWidth(address), cmdReadLevel(address, level::kPbtInner),
+                                cmdReadLevel(address, level::kPbtOuter)}) {
+        const auto wire = receiverCommand(command, receiver);
+        queueRead(wire, semanticKey(wire), priority);
+    }
+}
+
+static bool isPassbandRegister(std::span<const std::uint8_t> data)
+{
+    return data.size() >= 2
+        && ((data[0] == cmd::kSetting && data[1] == settingSub::kFilterWidth)
+            || (data[0] == cmd::kLevel && (data[1] == level::kPbtInner || data[1] == level::kPbtOuter)));
+}
+
+void IcomCivBackend::invalidateDualPassband(int receiver)
+{
+    m_civScheduler.invalidateMatching([receiver](const IcomCivScheduler::Request& request) {
+        const auto& wire = request.frame;
+        return wire.size() >= 9 && wire[4] == 0x29 && wire[5] == receiver
+            && isPassbandRegister(std::span(wire).subspan(6));
+    });
+}
+
+bool IcomCivBackend::handleDualPassband(const CivFrame& frame)
+{
+    if (!isPassbandRegister(frame.data)) { return false; }
+    if (frame.to != kControllerAddress) { return true; }
+    const auto payload = std::span(frame.data).subspan(2);
+    ReceiverState& state = m_receivers[frame.sub];
+    const bool width = frame.data[0] == cmd::kSetting;
+    if (payload.size() != (width ? 1u : 2u)
+        || !std::ranges::all_of(payload, [](auto b) { return (b >> 4) <= 9 && (b & 15) <= 9; })) {
+        return true;
+    }
+    const auto value = width ? filterWidthHzFromCode(filterMode(state.mode, state.data != 0),
+                                                      decodeBcdByte(payload.front()))
+                             : decodeLevel(payload);
+    if (!value || (!width && *value > 255)) { return true; }
+    const qint64 now = nowMs();
+    const auto observation = m_civScheduler.observe(frame, now);
+    ++m_framesObserved;
+    m_lastInboundCivAtMs = now;
+    std::vector<std::uint8_t> body{frame.cmd, frame.sub};
+    body.insert(body.end(), frame.data.begin(), frame.data.end());
+    traceCiv(false, body, false);
+    // 29 echoes the receiver and register only. An old slot's reply carries no slot ID.
+    if (observation == IcomCivScheduler::Observation::Accepted && state.modeKnown && !state.modeWritePending) {
+        int& current = width ? state.widthHz : (frame.data[1] == level::kPbtInner ? state.pbtInner : state.pbtOuter);
+        if (current != *value) {
+            current = *value;
+            if (width) {
+                state.slotWidths[state.filter - 1] = *value;
+                publishCapabilities();
+            }
+            publishDualReceiver(frame.sub);
+        }
+    }
+    pumpCiv(now);
+    return true;
+}
+
 void IcomCivBackend::publishDualReceiver(int receiver)
 {
     const ReceiverState& state = m_receivers[receiver];
@@ -291,9 +365,17 @@ void IcomCivBackend::publishDualReceiver(int receiver)
     if (state.modeKnown) {
         const std::string mode = modeToNeutral(state.mode, state.data != 0);
         delta.mode = QString::fromStdString(mode);
-        const auto [low, high] = passbandForModeAndFilter(mode, state.filter);
-        delta.filterLow = low;
-        delta.filterHigh = high;
+        const std::string ladder = filterMode(state.mode, state.data != 0);
+        if (state.widthHz > 0) {
+            const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder, state.widthHz),
+                                                       state.widthHz, state.pbtInner, state.pbtOuter);
+            delta.filterLow = edges.lowHz;
+            delta.filterHigh = edges.highHz;
+        } else {
+            const auto [low, high] = passbandForModeAndFilter(ladder, state.filter);
+            delta.filterLow = low;
+            delta.filterHigh = high;
+        }
     }
     QStringList modes;
     for (const std::string_view mode : modeListFor(*m_model)) {
@@ -327,6 +409,8 @@ void IcomCivBackend::writeDualMode(int receiver, CivMode mode, std::uint8_t data
         || filter < 1 || filter > 3 || !m_receivers[receiver].modeKnown) { return; }
     // All three fields are required: omitted DATA or filter changes the
     // radio's defaults. A write is intent; the 26 readback publishes truth.
+    invalidateDualPassband(receiver);
+    m_receivers[receiver].modeWritePending = true;
     const std::array<std::uint8_t, 3> value{
         static_cast<std::uint8_t>(mode), data, static_cast<std::uint8_t>(filter)};
     sendUserCommand(buildFrameSub(m_session->civAddress(), 0x26,
@@ -336,7 +420,9 @@ void IcomCivBackend::writeDualMode(int receiver, CivMode mode, std::uint8_t data
 void IcomCivBackend::setActiveSlice(int receiver)
 {
     if (!hasDualReceivers() || receiver < 0 || receiver > 1 || !m_receivers[receiver].visible) { return; }
+    const bool changed = m_dualFocus != receiver;
     m_dualFocus = receiver;
+    if (changed) { publishCapabilities(); }
     for (int index = 0; index < 2; ++index) {
         if (!m_receivers[index].visible) { continue; }
         SliceDelta delta;
@@ -348,6 +434,12 @@ void IcomCivBackend::setActiveSlice(int receiver)
 
 bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
 {
+    // Unaddressed panel traffic cannot identify whose filter changed. The
+    // paced 29 polls reconcile both receivers without borrowing panel focus.
+    if (frame.hasSub && ((frame.cmd == cmd::kSetting && frame.sub == settingSub::kFilterWidth)
+        || (frame.cmd == cmd::kLevel && (frame.sub == level::kPbtInner || frame.sub == level::kPbtOuter)))) {
+        return true;
+    }
     const bool waveform = frame.cmd == cmd::kScope && frame.hasSub && frame.sub == 0;
     if (waveform) {
         if (frame.data.empty() || frame.data[0] > 1) { return true; }
@@ -398,6 +490,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
     const bool dualWatch = frame.cmd == cmd::kVfoControl && frame.hasSub && frame.sub == 0xc2;
     if (frame.cmd == 0x29) {
         if (!frame.hasSub || frame.sub > 1 || frame.data.size() < 3) { return true; }
+        if (handleDualPassband(frame)) { return true; }
         // Only MAIN's generic register replies have legacy consumers. SUB
         // controls beyond frequency/mode/filter remain deferred.
         if (frame.sub != 0) {
@@ -452,10 +545,27 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         publishDualReceiver(frame.sub);
     } else if (mode) {
         ReceiverState& state = m_receivers[frame.sub];
+        const bool modeChanged = !state.modeKnown || state.mode != static_cast<CivMode>(frame.data[0])
+            || state.data != frame.data[1];
+        const bool contextChanged = modeChanged || state.filter != frame.data[2] || state.modeWritePending;
+        state.modeWritePending = false;
+        if (contextChanged) {
+            invalidateDualPassband(frame.sub);
+            if (modeChanged) { state.slotWidths = {}; }
+            // Recalling a previously visited slot can display its radio-reported
+            // width immediately while the new addressed read reconciles it.
+            state.widthHz = state.slotWidths[frame.data[2] - 1];
+            state.pbtInner = state.pbtOuter = kPbtCentreCode;
+            state.nextPassbandReadMs = 0;
+        }
         state.mode = static_cast<CivMode>(frame.data[0]);
         state.data = frame.data[1];
         state.filter = frame.data[2];
         state.modeKnown = true;
+        if (contextChanged) {
+            requestDualPassband(frame.sub);
+            publishCapabilities();
+        }
         if (frame.sub == m_dualTxReceiver) {
             confirmState(QStringLiteral("mode"), QStringLiteral("%1/%2/%3")
                 .arg(frame.data[0]).arg(state.data).arg(state.filter));
