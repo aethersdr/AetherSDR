@@ -80,8 +80,10 @@ public:
         if (!ready()) {
             return refusal("request.conflict", "radio connection is not ready");
         }
+        // Not transmitOwnershipPending(): a locally completed over keeps its
+        // ownership until stop evidence that may never come (#7462).
         if (caps.canTransmit
-            && (!m_confirmedIdle || m_radio->transmitOwnershipPending() || m_radio->isRadioTransmitting()
+            && (!m_confirmedIdle || !m_radio->transmitIdleForSelection() || m_radio->isRadioTransmitting()
                 || m_radio->transmitModel().isTransmitting()
                 || m_radio->transmitModel().isMox()
                 || m_radio->transmitModel().isTuning())) {
