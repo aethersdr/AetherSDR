@@ -1145,6 +1145,9 @@ public:
     // with a notice and false. A key-up releases only this request's own key.
     bool sendProducerRemoteCwKey(bool down, const QString& debugSource,
                                  const TxCoordinator::Request& request);
+    // A key the radio declined is sounding the local practice sidetone; the
+    // next key-up through sendCwInput() ends it.
+    bool cwPracticeToneOn() const { return m_cwPracticeKeyDown; }
     // A remote key edge with no request of its own: sendCwKey, but it never takes
     // over from host CW text, which only a local operator input does (#7347 ruling).
     // While host text plays its key-down is refused with a notice, and the

@@ -5517,7 +5517,8 @@ void TciServer::handleTuneRequest(TciClient* client, const TciProtocol::TuneRequ
 // keyer: keys through this client's TX producer. The key-up reuses the
 // key-down's request, so it can only release a key this client pressed, never
 // the operator's or another client's (#5873). A key-down refused while host CW
-// text plays leaves nothing held, so its key-up is ignored (#7347 ruling).
+// text plays leaves nothing held, so its key-up is ignored (#7347 ruling); one
+// the radio declined while practising holds its practice sidetone instead.
 void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRequest& request)
 {
     if (!m_model || !client) {
@@ -5551,7 +5552,11 @@ void TciServer::handleKeyerRequest(TciClient* client, const TciProtocol::KeyerRe
         }
         state->keyerRequest = input;
         state->keyerHeld = true;
-        if (!m_model->sendProducerRemoteCwKey(true, QStringLiteral("tci:keyer"), input)) {
+        const bool toneBefore = m_model->cwPracticeToneOn();
+        // A declined key-down that started the practice sidetone still owns
+        // it: only this client's key-up or disconnect ends the tone.
+        if (!m_model->sendProducerRemoteCwKey(true, QStringLiteral("tci:keyer"), input)
+            && (toneBefore || !m_model->cwPracticeToneOn())) {
             state->keyerRequest = {};
             state->keyerHeld = false;
         }
