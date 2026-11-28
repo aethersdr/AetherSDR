@@ -132,12 +132,14 @@ struct IcomCivBackendTestAccess {
         return b.m_civScheduler.stats().inFlightKey == b.semanticKey(frame);
     }
     static void pollLan(IcomCivBackend& b) { b.pollDualReceivers(); }
-    // Moves a running AF/IF grace clock one full interval into the past. With
-    // no clock running there is nothing to expire. The scheduler sees no time
-    // pass, so the caller completes every transaction with an injected reply.
+    // Makes a running AF/IF grace clock exactly one interval old as of now.
+    // With no clock running there is nothing to expire. pump() dispatches at
+    // nowMs() + 30, so a stamp can sit in the future; setting it, rather than
+    // subtracting, keeps the interval whole. The scheduler sees no time pass,
+    // so the caller completes every transaction with an injected reply.
     static void expireLanGrace(IcomCivBackend& b)
     {
-        if (b.m_lanOutputReadStartedAt) { *b.m_lanOutputReadStartedAt -= b.kLanOutputReadTimeoutMs; }
+        if (b.m_lanOutputReadStartedAt) { b.m_lanOutputReadStartedAt = b.nowMs() - b.kLanOutputReadTimeoutMs; }
     }
     static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
     // Borrow Dualwatch so restoration has a readback to wait for, then lose the
