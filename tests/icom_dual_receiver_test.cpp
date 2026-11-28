@@ -122,10 +122,24 @@ struct IcomCivBackendTestAccess {
     static auto snapshot(const IcomCivBackend& b, int slot) { return b.m_dualSavedPresets.at({6, slot}); }
     static void audio(IcomCivBackend& b, const std::vector<float>& pcm) { b.onDualAudio(pcm); }
     static void monoAudio(IcomCivBackend& b, const std::vector<float>& pcm) { b.onAudio(pcm); }
-    static void pollLan(IcomCivBackend& b, bool overdue = false)
+    static void queueOperatorMenuRead(IcomCivBackend& b, int item)
     {
-        if (overdue) { b.m_lanOutputReadStartedAt = b.nowMs() - b.kLanOutputReadTimeoutMs; }
-        b.pollDualReceivers();
+        const auto frame = cmdReadSetting(b.m_session->civAddress(), item);
+        b.queueRead(frame, b.semanticKey(frame), IcomCivScheduler::Priority::Operator);
+    }
+    static bool inFlight(const IcomCivBackend& b, const std::vector<std::uint8_t>& frame)
+    {
+        return b.m_civScheduler.stats().inFlightKey == b.semanticKey(frame);
+    }
+    static void pollLan(IcomCivBackend& b) { b.pollDualReceivers(); }
+    // Makes a running AF/IF grace clock exactly one interval old as of now.
+    // With no clock running there is nothing to expire. pump() dispatches at
+    // nowMs() + 30, so a stamp can sit in the future; setting it, rather than
+    // subtracting, keeps the interval whole. The scheduler sees no time pass,
+    // so the caller completes every transaction with an injected reply.
+    static void expireLanGrace(IcomCivBackend& b)
+    {
+        if (b.m_lanOutputReadStartedAt) { b.m_lanOutputReadStartedAt = b.nowMs() - b.kLanOutputReadTimeoutMs; }
     }
     static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
     // Borrow Dualwatch so restoration has a readback to wait for, then lose the
@@ -228,47 +242,149 @@ std::vector<std::uint8_t> makeScope(int receiver, int mode, std::uint64_t a,
     return body;
 }
 
+struct LanOutputStartup {
+    QStringList warnings;
+    int audioFrames = 0;
+    IcomCivBackend backend;
+    const int item;
+
+    explicit LanOutputStartup(std::uint8_t model)
+        : item(profileFor(*modelForId(model)).dualReceiver->lanOutputItem)
+    {
+        IcomCivBackendTestAccess::prepare(backend, model, false);
+        QObject::connect(&backend, &IRadioBackend::configurationWarning,
+                         [this](const QString& warning) { warnings.append(warning); });
+        QObject::connect(&backend, &IRadioBackend::audioFrameReady,
+                         [this](const PcmFrame&) { ++audioFrames; });
+    }
+
+    void reply(int value)
+    {
+        const auto frame = parseFrame(cmdWriteSetting(0x50, item, value));
+        std::vector<std::uint8_t> body{frame->cmd, frame->sub};
+        body.insert(body.end(), frame->data.begin(), frame->data.end());
+        IcomCivBackendTestAccess::inject(backend, body);
+    }
+
+    void feedAudio()
+    {
+        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
+        IcomCivBackendTestAccess::monoAudio(backend, std::vector<float>(2048, 0.25f));
+    }
+};
+
+void checkLanOutputStartup()
+{
+    using Access = IcomCivBackendTestAccess;
+    LanOutputStartup delayed(0x8e), unanswered(0x98), rejected(0xb2);
+    const auto afIf = cmdReadSetting(0x50, delayed.item);
+    Access::queueOperatorMenuRead(delayed.backend, 64);
+    Access::queueOperatorMenuRead(delayed.backend, 65);
+    for (auto* startup : {&delayed, &unanswered, &rejected}) {
+        Access::pollLan(startup->backend);
+        startup->feedAudio();
+        check(startup->warnings.isEmpty() && startup->audioFrames == 0,
+              "unknown LAN output withholds mono and stereo audio quietly at startup");
+    }
+    for (auto* startup : {&unanswered, &rejected}) {
+        check(Access::inFlight(startup->backend, cmdReadSetting(0x50, startup->item)),
+              "the initial AF/IF read is on the wire before testing a missing or negative reply");
+    }
+    Access::inject(rejected.backend, {0xfa});
+
+    // One real warning interval elapses on all three backends. No event loop
+    // runs: the delayed query stays queued, the unanswered query stays in flight.
+    QThread::msleep(5100);
+    Access::pollLan(delayed.backend);
+    check(!Access::sent(delayed.backend, afIf) && delayed.warnings.isEmpty(),
+          "over five seconds in the startup queue does not warn about an unsent AF/IF read");
+    Access::inject(delayed.backend, {0x1a, 0x05, 0x00, 0x65, 0x00});
+    Access::pump(delayed.backend);
+    check(Access::inFlight(delayed.backend, afIf), "AF/IF gets the first available startup control slot");
+    Access::inject(delayed.backend, {0x1a, 0x05, 0x00, 0x66, 0x00});
+    check(Access::inFlight(delayed.backend, afIf) && delayed.backend.profileMap().value("lanOutput") == -1,
+          "a reply for another menu item leaves AF/IF pending");
+    delayed.reply(0);
+    delayed.feedAudio();
+    check(delayed.audioFrames > 0 && delayed.warnings.isEmpty(),
+          "a valid AF reply after a long queue wait enables audio quietly");
+
+    for (auto* startup : {&unanswered, &rejected}) {
+        Access::pollLan(startup->backend);
+        Access::pollLan(startup->backend);
+        check(startup->warnings.size() == 1 && startup->warnings.first().contains("could not be read"),
+              "an unanswered or rejected AF/IF query warns once after dispatch");
+    }
+    for (auto* startup : {&delayed, &unanswered, &rejected}) {
+        const auto warnings = startup->warnings.size();
+        const int frames = startup->audioFrames;
+        startup->reply(1);
+        startup->feedAudio();
+        check(startup->audioFrames == frames && startup->warnings.size() == warnings + 1
+                  && startup->warnings.last().contains("output is IF"),
+              "confirmed IF withholds audio and has a distinct warning");
+        startup->reply(0);
+        startup->feedAudio();
+        check(startup->audioFrames > frames && startup->warnings.size() == warnings + 1,
+              "a later AF readback resumes audio without another warning");
+    }
+}
+
+// A reconnect starts a fresh AF/IF grace period. The second session does not
+// inherit the first session's AF readback, grace clock or one-warning latch.
+void checkLanOutputReconnect()
+{
+    using Access = IcomCivBackendTestAccess;
+    LanOutputStartup startup(0x98);
+    const auto afIf = cmdReadSetting(0x50, startup.item);
+    Access::pollLan(startup.backend);
+    const bool firstSent = Access::inFlight(startup.backend, afIf);
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    startup.reply(0);
+    startup.feedAudio();
+    check(firstSent && startup.warnings.size() == 1 && startup.warnings.first().contains("could not be read")
+              && startup.audioFrames > 0,
+          "first session: an unanswered AF/IF read warns once, then AF enables audio");
+
+    startup.backend.disconnectRadio();
+    startup.warnings.clear();  // the first session's warning
+    Access::prepare(startup.backend, 0x98, false);
+    // Identification on the unstarted test session warns about mono LAN audio.
+    // Any other warning raised by the new session's identification stays.
+    startup.warnings.removeIf([](const QString& warning) { return warning.contains("mono LAN audio"); });
+    const int frames = startup.audioFrames;
+    startup.feedAudio();
+    check(startup.audioFrames == frames, "after a reconnect, audio waits for this session's AF readback");
+
+    Access::queueOperatorMenuRead(startup.backend, 92);  // IC-7610 DATA1 input, ahead of AF/IF
+    Access::pollLan(startup.backend);
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    check(!Access::inFlight(startup.backend, afIf) && startup.warnings.isEmpty(),
+          "after a reconnect, the previous session's grace clock does not warn about an unsent read");
+    Access::inject(startup.backend, {0xfa});
+    Access::pump(startup.backend);
+    Access::pollLan(startup.backend);
+    check(Access::inFlight(startup.backend, afIf) && startup.warnings.isEmpty(),
+          "after a reconnect, the grace period starts when this session sends AF/IF");
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    check(startup.warnings.size() == 1 && startup.warnings.first().contains("could not be read"),
+          "after a reconnect, an unanswered AF/IF read warns once again");
+    startup.reply(0);
+    startup.feedAudio();
+    check(startup.audioFrames > frames && startup.warnings.size() == 1,
+          "after a reconnect, an AF readback resumes audio");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     TestSettingsProfile settings(QStringLiteral("icom-dual-receiver"));
     if (!settings.isValid()) { return 1; }
-    for (std::uint8_t model : {0x98, 0xb2, 0x8e}) {
-        IcomCivBackend backend;
-        QStringList warnings;
-        int audioFrames = 0;
-        QObject::connect(&backend, &IRadioBackend::configurationWarning,
-                         [&](const QString& warning) { warnings.append(warning); });
-        QObject::connect(&backend, &IRadioBackend::audioFrameReady,
-                         [&](const PcmFrame&) { ++audioFrames; });
-        IcomCivBackendTestAccess::prepare(backend, model, false);
-        warnings.clear();
-        IcomCivBackendTestAccess::pollLan(backend);
-        check(warnings.isEmpty(), "unknown LAN output allows a bounded initial read interval");
-        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
-        IcomCivBackendTestAccess::monoAudio(backend, std::vector<float>(2048, 0.25f));
-        check(audioFrames == 0, "unknown LAN output withholds both mono and stereo receive audio");
-        IcomCivBackendTestAccess::inject(backend, {0xfa});
-        IcomCivBackendTestAccess::pollLan(backend, true);
-        IcomCivBackendTestAccess::pollLan(backend, true);
-        check(warnings.size() == 1 && warnings.first().contains(QStringLiteral("could not be read")),
-              "unanswered or NAKed AF/IF read warns once after the deadline");
-        const auto setting = [&](int value) {
-            const auto frame = parseFrame(cmdWriteSetting(0x50, profileFor(*modelForId(model)).dualReceiver->lanOutputItem, value));
-            std::vector<std::uint8_t> body{frame->cmd, frame->sub};
-            body.insert(body.end(), frame->data.begin(), frame->data.end());
-            IcomCivBackendTestAccess::inject(backend, body);
-        };
-        setting(1);
-        check(warnings.size() == 2 && warnings.last().contains(QStringLiteral("output is IF")),
-              "confirmed IF has a distinct warning");
-        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
-        check(audioFrames == 0, "confirmed IF still withholds audio");
-        setting(0);
-        IcomCivBackendTestAccess::pollLan(backend, true);
-        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
-        check(audioFrames > 0 && warnings.size() == 2, "late AF readback resumes audio without another warning");
-    }
+    checkLanOutputStartup();
+    checkLanOutputReconnect();
     // Stock IC-7110 in Auto, then two explicit model choices at a different
     // radio's factory address. A stale channel override cannot grant stereo.
     struct MediaFixture {
