@@ -5,6 +5,8 @@
 
 #include "core/backends/hl2/MetisClient.h"
 
+#include <QNetworkInterface>
+
 #include <cstdio>
 
 using AetherSDR::hl2::MetisClient;
@@ -44,6 +46,38 @@ int main()
           "a radio on the LAN binds the interface discovery found");
     check(MetisClient::sessionBindAddress(radio, {}) == QHostAddress(QHostAddress::AnyIPv4),
           "and the wildcard when none was found");
+
+    // #7477: a target that is one of this host's own non-loopback addresses (an
+    // hpsdrsim reached through its LAN address) binds that address, so the reply
+    // comes from the address the sender filter expects. The host's addresses are
+    // passed in, so the check does not depend on this machine's interfaces.
+    const QList<QHostAddress> own{QHostAddress(QHostAddress::LocalHost),
+                                  QHostAddress(QHostAddress::LocalHostIPv6), lan};
+    check(MetisClient::sessionBindAddress(lan, nic, own) == lan,
+          "a session to one of this host's own addresses binds that address, "
+          "not the route discovery reported");
+    check(MetisClient::sessionBindAddress(lan, {}, own) == lan,
+          "and with no route reported");
+    check(MetisClient::sessionBindAddress(radio, nic, own) == nic,
+          "a LAN radio that is not one of this host's addresses keeps the reported route");
+    check(MetisClient::sessionBindAddress(radio, {}, own) == QHostAddress(QHostAddress::AnyIPv4),
+          "and the wildcard when none was found");
+    check(MetisClient::sessionBindAddress(sim, lan, own) == QHostAddress(QHostAddress::LocalHost),
+          "127.0.0.1 still binds loopback");
+    check(MetisClient::sessionBindAddress(QHostAddress(QHostAddress::LocalHostIPv6), {}, own)
+              == QHostAddress(QHostAddress::AnyIPv4),
+          "::1 still keeps the wildcard bind, although it is one of this host's addresses");
+    check(MetisClient::sessionBindAddress(broadcast, nic, own) == nic,
+          "a broadcast target keeps the reported route");
+    // The two-argument form reads this host's own addresses (an interface listing,
+    // no socket). Checked against the first non-loopback IPv4 one, when there is one.
+    for (const QHostAddress& a : QNetworkInterface::allAddresses()) {
+        if (a.protocol() != QAbstractSocket::IPv4Protocol || a.isLoopback())
+            continue;
+        check(MetisClient::sessionBindAddress(a, nic) == a,
+              "the two-argument form binds this host's own IPv4 address when targeted");
+        break;
+    }
 
     check(MetisClient::discoveryWalksInterface(true, true, sim),
           "a probe to 127.0.0.1 goes out on loopback");

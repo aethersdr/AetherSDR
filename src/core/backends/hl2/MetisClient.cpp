@@ -295,8 +295,16 @@ bool MetisClient::discoveryWalksInterface(bool upAndRunning, bool isLoopbackInte
 
 QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested)
 {
+    return sessionBindAddress(host, requested, QNetworkInterface::allAddresses());
+}
+
+QHostAddress MetisClient::sessionBindAddress(const QHostAddress& host, const QHostAddress& requested,
+                                             const QList<QHostAddress>& hostAddresses)
+{
     if (host.protocol() == QAbstractSocket::IPv4Protocol && host.isLoopback())
         return QHostAddress(QHostAddress::LocalHost);
+    if (host.protocol() == QAbstractSocket::IPv4Protocol && hostAddresses.contains(host))
+        return host;
     return requested.isNull() ? QHostAddress(QHostAddress::AnyIPv4) : requested;
 }
 
