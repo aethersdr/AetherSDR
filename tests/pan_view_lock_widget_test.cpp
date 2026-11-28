@@ -173,11 +173,13 @@ void testLockLandsSettlingZoom()
 }
 
 // A restore or the bridge can lock while a frequency-scale drag is in flight:
-// the drag ends there, so later mouse moves change nothing.
+// the drag ends there, so later mouse moves change nothing, and a release back
+// at the press point is still the end of a drag, not a click-to-tune.
 void testLockEndsSpanDrag()
 {
     SpectrumWidget widget;
     prepare(widget);
+    widget.setSingleClickTune(true);
     Requests requests(widget);
     const int scaleY = (widget.spectrumPixelHeight()
         + widget.height() - widget.waterfallPixelHeight()) / 2;
@@ -187,12 +189,15 @@ void testLockEndsSpanDrag()
     widget.setViewLocked(true);
     const int atLock = requests.rangeChanges();
     mouse(widget, QEvent::MouseMove, 620, scaleY);
-    mouse(widget, QEvent::MouseButtonRelease, 620, scaleY);
+    mouse(widget, QEvent::MouseMove, 402, scaleY);
+    mouse(widget, QEvent::MouseButtonRelease, 402, scaleY);
     wait(450);
     check(!near(draggedSpan, kSpan) && atLock > 0,
           "unlocked baseline: the scale drag was changing the span");
     check(near(widget.bandwidthMhz(), draggedSpan) && requests.rangeChanges() == atLock,
           "locking mid-drag ends the span drag: later moves change and request nothing");
+    check(near(requests.clicked, 0.0),
+          "locking mid-drag: the release back at the press point does not tune");
 }
 
 void testSliceDrag()

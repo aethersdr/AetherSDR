@@ -8713,6 +8713,7 @@ void SpectrumWidget::setViewLocked(bool locked)
         // it is locked; a pan drag already goes inert under the lock.
         if (m_draggingBandwidth) {
             endBandwidthDrag();
+            m_spotClickConsumed = true;  // the press began a drag, not a click
         } else {
             finishFrequencyRangeSettleUpdate();
         }
