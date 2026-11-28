@@ -15,6 +15,15 @@
 
 namespace AetherSDR::icom {
 
+namespace {
+
+QString antennaPortName(std::uint8_t port)
+{
+    return QStringLiteral("ANT%1").arg(port + 1);
+}
+
+} // namespace
+
 bool IcomCivBackend::hasDualReceivers() const
 {
     return m_model && profileFor(*m_model).dualReceiver.has_value();
@@ -262,6 +271,7 @@ void IcomCivBackend::pollDualReceivers()
     read(cmdReadTransmitFrequency(address));
     read(buildFrameSub(address, cmd::kControl, control::kPtt));
     read(cmdReadSetting(address, profileFor(*m_model).dualReceiver->lanOutputItem));
+    pollDualAntennas(now);
     if (const auto mod = currentModulationProfile()) {
         for (int item : {mod->dataOffInputItem, mod->dataInputItem, mod->networkLevelItem}) {
             read(cmdReadSetting(address, item));
@@ -280,6 +290,175 @@ void IcomCivBackend::pollDualReceivers()
             "Check the radio's LAN AF/IF Output menu and CI-V connection.");
         emit configurationWarning(warning);
     }
+}
+
+void IcomCivBackend::pollDualAntennas(qint64 now)
+{
+    const auto& profile = profileFor(*m_model).antennaRouting;
+    if (!profile) { return; }
+    const auto address = m_session->civAddress();
+    if (!m_lastDualAntennaPoll || now - *m_lastDualAntennaPoll >= 1000) {
+        m_lastDualAntennaPoll = now;
+        for (std::uint8_t receiver : {0, 1}) {
+            const auto frame = cmdReadReceiverAntenna(address, receiver);
+            queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
+        }
+    }
+    if (m_lastAntennaSettingsPoll && now - *m_lastAntennaSettingsPoll < 5000) { return; }
+    m_lastAntennaSettingsPoll = now;
+    const auto readSetting = [this, address](int item) {
+        if (item < 0) { return; }
+        const auto frame = cmdReadSetting(address, item);
+        queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Maintenance, 0,
+                  {encodeBcdByte(item / 100), encodeBcdByte(item % 100)});
+    };
+    for (const int item : profile->connectorItems) { readSetting(item); }
+    readSetting(profile->rxConnectorItem);
+}
+
+bool IcomCivBackend::handleDualAntennaFrame(const CivFrame& frame)
+{
+    const auto& profile = profileFor(*m_model).antennaRouting;
+    if (!profile) { return false; }
+
+    const auto observe = [this, &frame] {
+        std::vector<std::uint8_t> body{frame.cmd, frame.sub};
+        body.insert(body.end(), frame.data.begin(), frame.data.end());
+        traceCiv(false, body, false);
+        ++m_framesObserved;
+        m_lastInboundCivAtMs = nowMs();
+        return m_civScheduler.observe(frame, m_lastInboundCivAtMs)
+            != IcomCivScheduler::Observation::Stale;
+    };
+    if (isReceiverAntennaCommand(frame)) {
+        // The tagged read returns the selected port as data, including when
+        // the front panel or band memory changed it.
+        const auto selection = decodeReceiverAntenna(frame);
+        if (!selection || frame.to != kControllerAddress || selection->port >= profile->portCount
+            || (profile->ant4ReceiveOnlyOption && selection->port == 3 && selection->rxAntenna)) {
+            return true;
+        }
+        auto& antenna = m_receivers[frame.sub].antenna;
+        if (observe() && antenna != selection) {
+            antenna = selection;
+            publishDualAntenna(frame.sub);
+        }
+        pumpCiv(nowMs());
+        return true;
+    }
+
+    if (frame.cmd != cmd::kSetting || !frame.hasSub || frame.sub != settingSub::kMenu
+        || frame.data.size() < 2) { return false; }
+    const auto matchesItem = [&frame](int item) {
+        return item >= 0 && frame.data[0] == encodeBcdByte(item / 100)
+            && frame.data[1] == encodeBcdByte(item % 100);
+    };
+    const auto connector = std::ranges::find_if(profile->connectorItems, matchesItem);
+    const bool rxConnector = matchesItem(profile->rxConnectorItem);
+    if (connector == profile->connectorItems.end() && !rxConnector) { return false; }
+
+    const bool ant4 = connector == profile->connectorItems.begin() + 2;
+    const int maximum = ant4 && profile->ant4ReceiveOnlyOption ? 2 : 1;
+    if (frame.to != kControllerAddress || frame.data.size() != 3
+        || frame.data[2] > maximum) { return true; }
+    if (observe()) {
+        int& mode = rxConnector ? m_rxAntennaConnectorMode
+            : m_antennaConnectorModes[1 + (connector - profile->connectorItems.begin())];
+        if (mode != frame.data[2]) {
+            mode = frame.data[2];
+            publishDualAntenna(0);
+            publishDualAntenna(1);
+        }
+    }
+    pumpCiv(nowMs());
+    return true;
+}
+
+bool IcomCivBackend::rxAntennaAvailable(std::uint8_t port) const
+{
+    const auto& profile = *profileFor(*m_model).antennaRouting;
+    if (profile.ant4ReceiveOnlyOption) {
+        return port != 3 && m_antennaConnectorModes[3] == 2;
+    }
+    return m_rxAntennaConnectorMode == 0;
+}
+
+bool IcomCivBackend::antennaSelectionAvailable(AntennaSelection selection) const
+{
+    const auto& profile = *profileFor(*m_model).antennaRouting;
+    return selection.port < profile.portCount
+        && (selection.port == 0 || profile.connectorItems[selection.port - 1] < 0
+            || m_antennaConnectorModes[selection.port] == 1)
+        && (!selection.rxAntenna || rxAntennaAvailable(selection.port));
+}
+
+void IcomCivBackend::publishDualAntenna(int receiver)
+{
+    const auto& state = m_receivers[receiver];
+    const auto& profile = profileFor(*m_model).antennaRouting;
+    if (!profile || !state.visible) { return; }
+
+    SliceDelta delta;
+    QStringList ports;
+    if (state.antenna) {
+        for (std::uint8_t port = 0; port < profile->portCount; ++port) {
+            if (antennaSelectionAvailable({port, false})) { ports.append(antennaPortName(port)); }
+        }
+    }
+    const bool tx = m_dualSplit.has_value() && receiver == m_dualTxReceiver;
+    delta.txAntennaList = tx ? ports : QStringList{};
+    if (state.antenna) {
+        const QString port = antennaPortName(state.antenna->port);
+        delta.rxAntenna = state.antenna->rxAntenna ? QStringLiteral("RX-ANT") : port;
+        delta.txAntenna = tx ? port : QString{};
+        if (antennaSelectionAvailable({state.antenna->port, true})) {
+            ports.append(QStringLiteral("RX-ANT"));
+        }
+    }
+    delta.rxAntennaList = ports;
+    emit sliceChanged(receiver, delta);
+}
+
+bool IcomCivBackend::antennaWritesAllowed(qint64 now) const
+{
+    const auto ptt = m_confirmedState.constFind(QStringLiteral("ptt"));
+    return !m_keyed && !m_tuning && !m_pendingPttIntent.has_value()
+        && ptt != m_confirmedState.cend() && ptt->session == m_sessionGeneration
+        && ptt->accepted && !ptt->pending && !ptt->value.toBool() && now - ptt->atMs <= 2000;
+}
+
+ReceiveDispatch IcomCivBackend::requestDualAntenna(int receiver, const QString& name, bool transmit)
+{
+    if (receiver < 0 || receiver > 1 || !m_connected || !m_session || m_dualRestoring
+        || !m_receivers[receiver].visible) { return ReceiveDispatch::Unsupported; }
+
+    const auto selected = m_receivers[receiver].antenna;
+    // Slice setters report the request immediately. Restore the authoritative
+    // state until a valid reply arrives, including on a refused request.
+    publishDualAntenna(receiver);
+    if (!selected || !antennaWritesAllowed(nowMs())
+        || (transmit && (!m_dualSplit.has_value() || m_dualRequestedTxReceiver
+                         || receiver != m_dualTxReceiver))) {
+        return ReceiveDispatch::Unsupported;
+    }
+
+    std::optional<AntennaSelection> requested;
+    if (!transmit && name == QLatin1String("RX-ANT")) {
+        requested = AntennaSelection{selected->port, true};
+    } else {
+        const auto& profile = *profileFor(*m_model).antennaRouting;
+        for (std::uint8_t port = 0; port < profile.portCount; ++port) {
+            if (name == antennaPortName(port)) {
+                requested = AntennaSelection{port,
+                    transmit && selected->rxAntenna && rxAntennaAvailable(port)};
+                break;
+            }
+        }
+    }
+    if (!requested || !antennaSelectionAvailable(*requested)) { return ReceiveDispatch::Unsupported; }
+    sendUserCommand(cmdSetReceiverAntenna(m_session->civAddress(),
+        static_cast<std::uint8_t>(receiver), *requested));
+    return ReceiveDispatch::Dispatched;
 }
 
 void IcomCivBackend::publishDualReceiver(int receiver)
@@ -348,6 +527,7 @@ void IcomCivBackend::setActiveSlice(int receiver)
 
 bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
 {
+    if (handleDualAntennaFrame(frame)) { return true; }
     const bool waveform = frame.cmd == cmd::kScope && frame.hasSub && frame.sub == 0;
     if (waveform) {
         if (frame.data.empty() || frame.data[0] > 1) { return true; }
@@ -492,10 +672,15 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (m_dualWatch == true && frame.data[0] == 0 && !m_dualPanClosing) { m_dualWatchOwned = false; }
         m_dualWatch = frame.data[0] != 0;
     } else if (split) {
+        const bool splitChanged = m_dualSplit != (frame.data[0] != 0);
         const int receiver = frame.data[0];
         m_dualSplit = receiver != 0;
         m_dualTxReceiver = receiver;
         if (m_dualRequestedTxReceiver == receiver) { m_dualRequestedTxReceiver.reset(); }
+        if (splitChanged) {
+            publishDualAntenna(0);
+            publishDualAntenna(1);
+        }
     } else if (txFrequency) {
         m_dualTxFrequencyHz = decodeFreq(frame.data);
         TransmitDelta delta;
@@ -579,6 +764,7 @@ void IcomCivBackend::publishDualPan(int receiver)
     delta.audioMute = state.monitorMute;
     emit sliceChanged(receiver, delta);
     publishDualReceiver(receiver);
+    publishDualAntenna(receiver);
 }
 
 bool IcomCivBackend::createPanadapter()

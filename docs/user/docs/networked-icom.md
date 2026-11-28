@@ -228,9 +228,21 @@ the source warning checks that variant, so D1 on USB does not imply D2 is also
 on USB. **IC-7760 transmit is enabled from its CI-V guide using the shared
 IC-7610 transmit path; it is not yet confirmed on hardware.** The IC-7851
 receive and TX-selection checks do not establish RF transmit qualification
-for any of these models. Diversity, all four IC-7851 antenna ports,
-receiver-specific DSP, calibrated meters and other model differences are
-outside this initial support.
+for any of these models.
+
+Use the VFO card's antenna picker to change the selected connector while
+receiving. MAIN and SUB each display the radio's confirmed antenna. The TX
+picker follows the confirmed transmit receiver, and changing its port can
+also change that receiver's antenna. The IC-7610 supports ANT1 and ANT2.
+The IC-7760 and IC-7851 support ANT1 through ANT4 when enabled on the radio.
+RX-ANT appears when the radio's connector configuration allows it. On the
+IC-7851, ANT4 configured for receive only is selected as **RX-ANT** and the
+underlying ANT1, ANT2, or ANT3 remains the transmit connector. The radio's
+front-panel changes and band recalls update the pickers automatically.
+Antenna switching waits for confirmed receive status.
+
+Diversity, receiver-specific DSP, calibrated meters and other model
+differences are outside this initial support.
 
 ### Not available on a networked Icom
 

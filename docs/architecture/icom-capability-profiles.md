@@ -60,6 +60,25 @@ defines those registers independently. The IC-9700 also carries preserved live
 trace evidence; the IC-705 extended surface remains guide-proved until an
 operator pass exercises it on hardware.
 
+## MAIN/SUB antenna routing
+
+The IC-7610, IC-7760, and IC-7850/7851 use `29 <receiver> 12` to read
+the active route and `29 <receiver> 12 <port> <RX-ANT flag>` to change it.
+Receiver, port, and flag are independently validated. Both receivers are
+polled, and port writes share a generation with their receiver's confirming
+read. The TX picker follows radio-confirmed split. The backend checks PTT
+before accepting and dispatching a switch.
+
+| Model | Ports | Connector configuration read from the radio |
+|---|---|---|
+| IC-7610 | ANT1–ANT2 | SET 0275 selects receive antenna or external device |
+| IC-7760 | ANT1–ANT4 | SET 0344–0346 enable ANT2–ANT4, and SET 0347 selects receive antenna or external device |
+| IC-7850/7851 | ANT1–ANT4 | SET 0306–0308 configure ANT2–ANT4. ANT4 can be RX-only and is then reached through the RX-ANT flag on ANT1–ANT3 |
+
+The IC-7300MK2's single receiver continues to use its existing unwrapped
+`12` read and fixed port byte. The flagship antenna controls do not use the
+MK2's single-value automation scrub.
+
 ## Effective control registry
 
 Each `ControlSpec` names the `IcomFeature` it requires. `controls map` returns

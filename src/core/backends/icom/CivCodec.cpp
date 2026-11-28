@@ -815,6 +815,33 @@ std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
     return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
+std::vector<std::uint8_t> cmdReadReceiverAntenna(std::uint8_t to, std::uint8_t receiver)
+{
+    return buildFrameSub(to, 0x29, receiver, std::array{cmd::kRxAntenna});
+}
+
+std::vector<std::uint8_t> cmdSetReceiverAntenna(std::uint8_t to, std::uint8_t receiver,
+                                                AntennaSelection selection)
+{
+    return buildFrameSub(to, 0x29, receiver, std::array{
+        cmd::kRxAntenna, selection.port, static_cast<std::uint8_t>(selection.rxAntenna)});
+}
+
+bool isReceiverAntennaCommand(const CivFrame& frame)
+{
+    return frame.cmd == 0x29 && frame.hasSub && !frame.data.empty()
+        && frame.data.front() == cmd::kRxAntenna;
+}
+
+std::optional<AntennaSelection> decodeReceiverAntenna(const CivFrame& frame)
+{
+    if (!isReceiverAntennaCommand(frame) || frame.sub > 1 || frame.data.size() != 3
+        || frame.data[1] > 3 || frame.data[2] > 1) {
+        return std::nullopt;
+    }
+    return AntennaSelection{frame.data[1], frame.data[2] == 1};
+}
+
 std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to)
 {
     return buildFrame(to, cmd::kDuplex);

@@ -396,7 +396,7 @@ void SliceModel::setTxAntenna(const QString& ant)
     const auto current = captureControlIntent(field);
     m_txAntenna = ant;
     emit controlRequested({field, ant});
-    if (!current()) { return; }
+    if (!current() || m_txAntenna != ant) { return; }
     emit txAntennaChanged(ant);
 }
 

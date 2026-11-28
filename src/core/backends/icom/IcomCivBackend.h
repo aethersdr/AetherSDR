@@ -379,6 +379,13 @@ private:
     void warnScopeRejection(const ScopeDecoder& decoder);
     bool handleDualReceiverFrame(const CivFrame& frame);
     void publishDualReceiver(int receiver);
+    void pollDualAntennas(qint64 now);
+    bool handleDualAntennaFrame(const CivFrame& frame);
+    void publishDualAntenna(int receiver);
+    ReceiveDispatch requestDualAntenna(int receiver, const QString& name, bool transmit);
+    bool antennaWritesAllowed(qint64 now) const;
+    bool antennaSelectionAvailable(AntennaSelection selection) const;
+    bool rxAntennaAvailable(std::uint8_t port) const;
     void syncDualTransmit();
     void writeDualMode(int receiver, CivMode mode, std::uint8_t data, int filter);
     std::vector<std::uint8_t> receiverCommand(const std::vector<std::uint8_t>& frame) const;
@@ -397,6 +404,7 @@ private:
         std::uint8_t data = 0;
         int filter = 1;
         bool modeKnown = false;
+        std::optional<AntennaSelection> antenna;
         int monitorGain = 100;
         int monitorPan = 50;
         bool monitorMute = false;
@@ -424,6 +432,10 @@ private:
         std::unique_ptr<Resampler> audio;
     };
     std::array<ReceiverState, 2> m_receivers;
+    std::array<int, 4> m_antennaConnectorModes{{1, -1, -1, -1}};
+    int m_rxAntennaConnectorMode = -1;
+    std::optional<qint64> m_lastDualAntennaPoll;
+    std::optional<qint64> m_lastAntennaSettingsPoll;
     bool m_dualInitialized = false;
     std::optional<bool> m_dualSplit;
     std::optional<int> m_dualRequestedTxReceiver;

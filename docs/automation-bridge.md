@@ -4611,6 +4611,12 @@ SUB scope frames must not recreate its pane. Background drag and zoom must
 change radio-reported window edges, preserve both dial frequencies and leave
 the other receiver's window unchanged, including when both use the same band.
 
+For Icom antenna checks, use `slice select <id>` before `slice rxant <port>`.
+`get slice <id>` reports `rxAntennaList` and `txAntennaList` alongside the
+current values. A successful request queues the switch. Confirm the result
+with `get slice <id> rxAntenna` and the tagged `29 <receiver> 12` reply in
+`civ trace`.
+
 `modulationInputs` reports separate DATA OFF/D1/D2/D3 menu numbers and
 radio-read source values/names. Missing values mean no readback yet. These
 are global menus, selected by the TX receiver's DATA variant, not local focus.
