@@ -553,9 +553,8 @@ constexpr std::array kSpecs = {
                 Plane::Radio, Encoding::OnOff, Wiring::Declared,
                 0, 1, "on/off", 0, 1,
                 "", "", false,
-                "NOT WIRED ON PURPOSE. Over WiFi 18 00 drops the WLAN interface, "
-                "so the 18 01 that would bring it back has no path — a one-way "
-                "trip. capabilities().canReboot is false for this reason."},
+                "Standby uses the disconnect sequence with a live power-off "
+                "setting and RX check. General power-off and reboot are unavailable."},
 };
 
 // Compile-time lookup keeps shared command metadata identical across dialects.

@@ -472,6 +472,9 @@ struct IcomModelProfile {
     MeterCalibrationProfile meters{};
     std::optional<SquelchScaleProfile> squelchScale{};
     std::optional<PowerOnProfile> powerOn{};
+    // SET > Network item for the native radio's remote power-off policy.
+    // Only a live Standby/Shutdown readback permits the power-off command.
+    std::optional<int> remoteStandbyItem{};
     std::optional<CivRecoveryProfile> civRecovery{};
     std::optional<MemoryProfile> memory{};
     std::optional<NetworkConfigurationProfile> networkConfiguration{};

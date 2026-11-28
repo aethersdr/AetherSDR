@@ -3019,6 +3019,8 @@ read callback.
 ← {"ok":true,"disconnect":true,"requested":true,"deferred":true}
 ```
 
+For an IC-705 or IC-7300MK2 with wake and standby enabled in the connection dialog, `disconnect` follows the same standby checks as the visible Disconnect action. The bridge response acknowledges scheduling. Read the radio's connection state and the UI status message for the outcome.
+
 Bare-line forms are also accepted:
 
 ```text

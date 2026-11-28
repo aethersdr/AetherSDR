@@ -70,6 +70,7 @@ public:
     // ---- lifecycle ----
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
+    void disconnectRadio(const RadioDisconnectRequest& request) override;
     [[nodiscard]] bool isConnected() const override;
 
     // ---- intents DOWN ----
@@ -190,6 +191,11 @@ private:
     // has advanced to a replacement session; exercising only the public UDP
     // path cannot make that queued-delivery race deterministic.
     friend struct IcomCivBackendTestAccess;
+
+    void sendDisconnectSafetyWrites();
+    void sendStandbyCiv(const std::vector<std::uint8_t>& frame);
+    void handleStandbyCivFrame(const CivFrame& frame);
+    void finishStandbyDisconnect(const QString& message);
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
@@ -506,6 +512,9 @@ private:
     bool m_wakeOnConnect = false;
     bool m_waitingForWake = false;
     uint m_wakeModelId = 0;
+    enum class StandbyPhase { Idle, ReadSetting, CheckReceive, ConfirmReceive, AwaitAck, Finishing };
+    StandbyPhase m_standbyPhase = StandbyPhase::Idle;
+    bool m_standbyPowerSent = false;
     bool m_memoryRefreshActive = false;
     quint64 m_memoryRefreshGeneration = 0;
     QSet<int> m_memoryRefreshReplies;

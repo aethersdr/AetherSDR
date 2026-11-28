@@ -1022,7 +1022,7 @@ public:
     void resolveMultiFlexConflict(quint32 handle);
     // Called by MainWindow when the user cancels the conflict dialog.
     void cancelMultiFlexConflict();
-    void disconnectFromRadio();
+    void disconnectFromRadio(bool requestStandby = false);
     void forceDisconnect();  // Close TCP but allow auto-reconnect
     // Send `radio reboot` (FlexLib Radio.cs:2575), surface a notification to
     // the operator, then trigger forceDisconnect so the standard reconnect
@@ -1520,6 +1520,7 @@ signals:
     // Radio CONFIGURATION advice that does not end the session. See
     // IRadioBackend::configurationWarning for why this is a separate channel.
     void configurationWarning(const QString& msg);
+    void disconnectStatus(const QString& message);
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
     // WanConnection. UI is expected to prompt the operator and call
     // accept/rejectPresentedWanCert() in response.

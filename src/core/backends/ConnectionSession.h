@@ -23,6 +23,9 @@ struct RadioDisconnectRequest {
     // Deferred retires the session now; bounded transport cleanup runs on its
     // worker. Intentional disconnect and destruction still wait for completion.
     Completion completion{Completion::Wait};
+    // An explicit user disconnect may request wakeable standby on a backend
+    // that can verify the radio's current power policy and receive state.
+    bool requestStandby{false};
 };
 
 struct ReceiveTransportResult {

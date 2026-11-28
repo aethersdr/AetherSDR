@@ -18,6 +18,7 @@ AETHER_SEAM_PROBE(connectionSessionStarting);
 AETHER_SEAM_PROBE(connectionVersionReceived);
 AETHER_SEAM_PROBE(connected);
 AETHER_SEAM_PROBE(disconnected);
+AETHER_SEAM_PROBE(disconnectStatus);
 AETHER_SEAM_PROBE(connectionError);
 AETHER_SEAM_PROBE(configurationWarning);
 AETHER_SEAM_PROBE(transmitChangeRefused);

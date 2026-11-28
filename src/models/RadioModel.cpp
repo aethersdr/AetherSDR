@@ -1373,6 +1373,10 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::configurationWarning,
             this, &RadioModel::configurationWarning);
+    connect(m_backend.get(), &IRadioBackend::disconnectStatus, this,
+            [this, generation](const QString& message) {
+        if (generation == m_backendReceiverGeneration) { emit disconnectStatus(message); }
+    });
 
     // A change refused while transmitting goes on the panadapter, like the
     // other transmit-time notices: the status bar would hide the TX indicator.
@@ -4644,10 +4648,12 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
     return true;
 }
 
-void RadioModel::disconnectFromRadio()
+void RadioModel::disconnectFromRadio(bool requestStandby)
 {
     ++m_connectionIntentRevision;
-    const RadioDisconnectRequest cleanup{m_rxAudio.streamId};
+    const RadioDisconnectRequest cleanup{
+        m_rxAudio.streamId, RadioDisconnectRequest::Completion::Wait,
+        requestStandby && IcomSettings::wakeOnConnect()};
     retireObservationSession();
     resetSessionControls();
     resetAdministration();

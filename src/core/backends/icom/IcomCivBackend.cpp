@@ -58,6 +58,8 @@ Q_LOGGING_CATEGORY(lcIcomLink, "aether.icom.link")
 Q_LOGGING_CATEGORY(lcIcomScheduler, "aether.icom.scheduler")
 Q_LOGGING_CATEGORY(lcIcomIncident, "aether.icom.incident")
 
+constexpr int kStandbyDisconnectTimeoutMs = 1500;
+
 // Which CI-V address we ended up talking to, and why. Its own category because
 // a wrong address is SILENT — the radio simply never answers — so when the
 // symptom is "connected but nothing works", this is the one trace that
@@ -739,8 +741,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
         }
     }
 
-    // A one-way trip over WiFi: 0x18 0x00 powers the radio off, which drops the
-    // WLAN interface, so the 0x18 0x01 that would bring it back has no path.
+    // Standby is available only through the checked disconnect sequence.
     c.canReboot = false;
     c.hasRemoteOnControl = false;
     c.canUpgradeFirmware = false;
@@ -1040,9 +1041,164 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
         emit connectionError(QStringLiteral("could not open the Icom session"));
 }
 
+void IcomCivBackend::disconnectRadio(const RadioDisconnectRequest& request)
+{
+    const auto standbyItem = profileFor(*m_model).remoteStandbyItem;
+    if (!request.requestStandby || !m_connected || !standbyItem) {
+        disconnectRadio();
+        return;
+    }
+    if (m_standbyPhase != StandbyPhase::Idle) {
+        return; // repeated explicit disconnect while the same request is pending
+    }
+    if (m_keyed || m_tuning || m_pendingPttIntent) {
+        emit disconnectStatus(tr("Icom standby skipped because transmit was active or pending."));
+        disconnectRadio();
+        return;
+    }
+    if (!m_session || !m_session->ownsCivStream() || m_civAmbiguous || !m_civReported
+        || m_civReported != m_session->advertisedCivAddress()) {
+        emit disconnectStatus(tr("Icom standby skipped because the radio's control session could not be verified."));
+        disconnectRadio();
+        return;
+    }
+
+    m_standbyPhase = StandbyPhase::ReadSetting;
+    for (QTimer* timer : {m_meterTimer, m_linkTimer, m_civDetectTimer}) {
+        if (timer) { timer->stop(); }
+    }
+    m_session->flushTxAudio();
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
+    const auto generation = m_sessionGeneration;
+    QTimer::singleShot(kStandbyDisconnectTimeoutMs, this, [this, generation] {
+        if (generation == m_sessionGeneration && m_standbyPhase != StandbyPhase::Idle) {
+            finishStandbyDisconnect(m_standbyPowerSent
+                ? tr("Icom standby unconfirmed. The radio did not acknowledge the request.")
+                : tr("Icom standby skipped because the radio's settings or receive state could not be verified."));
+        }
+    });
+    emit disconnectStatus(tr("Checking Icom standby…"));
+    sendStandbyCiv(cmdReadSetting(m_civReported, *standbyItem));
+}
+
+void IcomCivBackend::sendStandbyCiv(const std::vector<std::uint8_t>& frame)
+{
+    traceCiv(true, frame);
+    m_session->sendCiv(frame);
+}
+
+void IcomCivBackend::handleStandbyCivFrame(const CivFrame& frame)
+{
+    if (frame.from != m_civReported || m_standbyPhase == StandbyPhase::Finishing) {
+        return;
+    }
+    const bool ptt = frame.cmd == cmd::kControl && frame.hasSub
+        && frame.sub == control::kPtt && frame.data.size() == 1;
+    if (ptt && frame.data[0] == 1 && !m_standbyPowerSent
+        && (frame.to == kControllerAddress || frame.to == kBroadcastAddress)) {
+        finishStandbyDisconnect(tr("Icom standby skipped because the radio is transmitting."));
+        return;
+    }
+    if (frame.to != kControllerAddress) {
+        return;
+    }
+    const auto readPtt = [this] { return buildFrameSub(m_civReported, cmd::kControl, control::kPtt); };
+    switch (m_standbyPhase) {
+    case StandbyPhase::ReadSetting: {
+        const int item = *profileFor(*m_model).remoteStandbyItem;
+        if (frame.cmd != cmd::kSetting || !frame.hasSub || frame.sub != settingSub::kMenu
+            || frame.data.size() != 3 || frame.data[0] != encodeBcdByte(item / 100)
+            || frame.data[1] != encodeBcdByte(item % 100)) {
+            return;
+        }
+        if (frame.data[2] != 1) {
+            finishStandbyDisconnect(tr("Icom standby skipped. Set Power OFF Setting (for Remote Control) to Standby/Shutdown on the radio."));
+            return;
+        }
+        m_standbyPhase = StandbyPhase::CheckReceive;
+        sendStandbyCiv(readPtt());
+        return;
+    }
+    case StandbyPhase::CheckReceive:
+        if (ptt && frame.data[0] == 0) {
+            sendDisconnectSafetyWrites();
+            // These response-free safety writes can still yield generic ACKs.
+            // Require a directed, typed RX reply on the ordered serial stream
+            // after them before any generic reply can complete the power request.
+            m_standbyPhase = StandbyPhase::ConfirmReceive;
+            sendStandbyCiv(readPtt());
+        }
+        return;
+    case StandbyPhase::ConfirmReceive:
+        if (ptt && frame.data[0] == 0) {
+            if (!m_session->ownsCivStream()) {
+                finishStandbyDisconnect(tr("Icom standby skipped because the control session ended."));
+                return;
+            }
+            m_standbyPhase = StandbyPhase::AwaitAck;
+            m_standbyPowerSent = true;
+            sendStandbyCiv(cmdPowerOff(m_civReported));
+        }
+        return;
+    case StandbyPhase::AwaitAck:
+        if (frame.data.empty() && (frame.isOk() || frame.isNg())) {
+            finishStandbyDisconnect(frame.isOk()
+                ? tr("Icom standby request accepted.")
+                : tr("Icom standby request rejected by the radio."));
+        }
+        return;
+    case StandbyPhase::Idle:
+    case StandbyPhase::Finishing:
+        return;
+    }
+}
+
+void IcomCivBackend::finishStandbyDisconnect(const QString& message)
+{
+    if (m_standbyPhase == StandbyPhase::Finishing) {
+        return;
+    }
+    m_standbyPhase = StandbyPhase::Finishing;
+    const auto generation = m_sessionGeneration;
+    // A reply or link failure can arrive inside the transport's own signal.
+    // Let that stack unwind before disconnectRadio destroys the session.
+    QTimer::singleShot(0, this, [this, generation, message] {
+        if (generation != m_sessionGeneration) {
+            return;
+        }
+        qCInfo(lcIcomLink).noquote() << message;
+        emit disconnectStatus(message);
+        disconnectRadio();
+    });
+}
+
+void IcomCivBackend::sendDisconnectSafetyWrites()
+{
+    if (!m_model->isKnown() || m_model->hasTransmit) {
+        queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()), "cw.message");
+        queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
+    }
+    if (capabilities().hasTransmitFrequencyCheck || m_xfcReleaseRequired || m_transmitFrequencyCheck) {
+        queueEmergencyWriteNoReply(cmdSetTransmitFrequencyCheck(m_session->civAddress(), false), "xfc");
+    }
+    if (m_tuning && m_preTuneTxPowerPercent >= 0) {
+        queueEmergencyWriteNoReply(
+            cmdSetLevel(m_session->civAddress(), level::kRfPower,
+                        percentToLevelRaw(m_preTuneTxPowerPercent)), "level.rfPower");
+    }
+    const qint64 now = nowMs();
+    // No-reply writes retire synchronously, one per pump.
+    for (int i = 0; i < 64 && !m_civScheduler.idle(); ++i) {
+        pumpCiv(now);
+    }
+}
+
 void IcomCivBackend::disconnectRadio()
 {
     if (m_dualRestoring) { return; }
+    m_standbyPhase = StandbyPhase::Idle;
+    const bool standbyPowerSent = std::exchange(m_standbyPowerSent, false);
     const QPointer<IcomCivBackend> alive(this);
     if (hasDualReceivers() && m_session && m_session->isConnected() && m_connected && !m_keyed
         && (!m_dualWrittenPresets.empty() || m_dualWatchOwned)) {
@@ -1066,33 +1222,10 @@ void IcomCivBackend::disconnectRadio()
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
     // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
-    if (m_session && m_connected) {
+    if (m_session && m_connected && !standbyPowerSent) {
         terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                            SchedulerWaiterOutcome::Cancelled);
-        if (!m_model->isKnown() || m_model->hasTransmit) {
-            queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
-                                       "cw.message");
-            queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
-        }
-        if (capabilities().hasTransmitFrequencyCheck
-            || m_xfcReleaseRequired || m_transmitFrequencyCheck) {
-            queueEmergencyWriteNoReply(
-                cmdSetTransmitFrequencyCheck(m_session->civAddress(), false), "xfc");
-        }
-        if (m_tuning && m_preTuneTxPowerPercent >= 0) {
-            queueEmergencyWriteNoReply(
-                cmdSetLevel(m_session->civAddress(), level::kRfPower,
-                            percentToLevelRaw(m_preTuneTxPowerPercent)),
-                "level.rfPower");
-        }
-        const qint64 now = nowMs();
-        // No-reply emergency writes retire synchronously, one per pump. Drain
-        // the bounded teardown burst instead of assuming it will forever have
-        // exactly three members (CW abort, unkey, XFC release, optional power
-        // restore today).
-        for (int i = 0; i < 64 && !m_civScheduler.idle(); ++i) {
-            pumpCiv(now);
-        }
+        sendDisconnectSafetyWrites();
     }
 
     for (QTimer** t : {&m_meterTimer, &m_linkTimer, &m_civDetectTimer}) {
@@ -1763,6 +1896,12 @@ void IcomCivBackend::publishPreampControls()
 
 void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
+    if (m_standbyPhase != StandbyPhase::Idle) {
+        finishStandbyDisconnect(m_standbyPowerSent
+            ? tr("Icom standby unconfirmed because the control session ended.")
+            : tr("Icom standby skipped because the control session ended."));
+        return;
+    }
     m_mainModeConfirmed = false;
     m_pendingMainVfoEdit.reset();
     m_tuneTimer->stop();
@@ -2680,6 +2819,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
                                 std::uint64_t sessionGeneration)
 {
     if (!m_connected || sessionGeneration != m_sessionGeneration) {
+        return;
+    }
+    if (m_standbyPhase != StandbyPhase::Idle) {
+        handleStandbyCivFrame(incoming);
         return;
     }
     CivFrame frame = incoming;
@@ -4809,6 +4952,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
                                qint64 notBeforeMs,
                                std::vector<std::uint8_t> replyDataPrefix, bool coalesce)
 {
+    if (m_standbyPhase != StandbyPhase::Idle) { return; }
     const std::vector<std::uint8_t> wire = receiverCommand(frame);
     const std::optional<CivFrame> parsed = parseFrame(wire);
     if (!parsed || (hasSelectedBandDualwatch() && !selectedBandCommandAllowed(*parsed, false))) {
@@ -4848,6 +4992,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
                                 bool supersedes,
                                 bool coalesce, const std::optional<TxCoordinator::Command>& command)
 {
+    if (m_standbyPhase != StandbyPhase::Idle) { return; }
     IcomCivScheduler::Request request;
     const auto parsed = parseFrame(frame);
     if (hasSelectedBandDualwatch() && (!parsed || !selectedBandCommandAllowed(*parsed, true))) {
@@ -6868,6 +7013,7 @@ bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
 
 void IcomCivBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (m_standbyPhase != StandbyPhase::Idle) { return; }
     if (!TxCoordinator::Command{operation, key}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -6950,6 +7096,7 @@ void IcomCivBackend::clearDerivedForwardPower()
 
 void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (m_standbyPhase != StandbyPhase::Idle) { return; }
     if (!TxCoordinator::Command{operation, on}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -8122,6 +8269,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         return;
     }
     if (verb == QLatin1String("power.wake")) {
+        if (m_standbyPhase != StandbyPhase::Idle) {
+            emit extensionError(requestId, tr("The radio is disconnecting."));
+            return;
+        }
         const QVariantMap selection = arg.toMap();
         bool modelOk = false;
         bool addressOk = false;
