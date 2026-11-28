@@ -132,6 +132,13 @@ struct IcomCivBackendTestAccess {
         return b.m_civScheduler.stats().inFlightKey == b.semanticKey(frame);
     }
     static void pollLan(IcomCivBackend& b) { b.pollDualReceivers(); }
+    // Moves a running AF/IF grace clock one full interval into the past. With
+    // no clock running there is nothing to expire. The scheduler sees no time
+    // pass, so the caller completes every transaction with an injected reply.
+    static void expireLanGrace(IcomCivBackend& b)
+    {
+        if (b.m_lanOutputReadStartedAt) { *b.m_lanOutputReadStartedAt -= b.kLanOutputReadTimeoutMs; }
+    }
     static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
     // Borrow Dualwatch so restoration has a readback to wait for, then lose the
     // transport while the bounded wait is running.
@@ -321,12 +328,61 @@ void checkLanOutputStartup()
     }
 }
 
+// A reconnect starts a fresh AF/IF grace period. The second session does not
+// inherit the first session's AF readback, grace clock or one-warning latch.
+void checkLanOutputReconnect()
+{
+    using Access = IcomCivBackendTestAccess;
+    LanOutputStartup startup(0x98);
+    const auto afIf = cmdReadSetting(0x50, startup.item);
+    Access::pollLan(startup.backend);
+    const bool firstSent = Access::inFlight(startup.backend, afIf);
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    startup.reply(0);
+    startup.feedAudio();
+    check(firstSent && startup.warnings.size() == 1 && startup.warnings.first().contains("could not be read")
+              && startup.audioFrames > 0,
+          "first session: an unanswered AF/IF read warns once, then AF enables audio");
+
+    startup.backend.disconnectRadio();
+    startup.warnings.clear();  // the first session's warning
+    Access::prepare(startup.backend, 0x98, false);
+    // Identification on the unstarted test session warns about mono LAN audio.
+    // Any other warning raised by the new session's identification stays.
+    startup.warnings.removeIf([](const QString& warning) { return warning.contains("mono LAN audio"); });
+    const int frames = startup.audioFrames;
+    startup.feedAudio();
+    check(startup.audioFrames == frames, "after a reconnect, audio waits for this session's AF readback");
+
+    Access::queueOperatorMenuRead(startup.backend, 92);  // IC-7610 DATA1 input, ahead of AF/IF
+    Access::pollLan(startup.backend);
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    check(!Access::inFlight(startup.backend, afIf) && startup.warnings.isEmpty(),
+          "after a reconnect, the previous session's grace clock does not warn about an unsent read");
+    Access::inject(startup.backend, {0xfa});
+    Access::pump(startup.backend);
+    Access::pollLan(startup.backend);
+    check(Access::inFlight(startup.backend, afIf) && startup.warnings.isEmpty(),
+          "after a reconnect, the grace period starts when this session sends AF/IF");
+    Access::expireLanGrace(startup.backend);
+    Access::pollLan(startup.backend);
+    check(startup.warnings.size() == 1 && startup.warnings.first().contains("could not be read"),
+          "after a reconnect, an unanswered AF/IF read warns once again");
+    startup.reply(0);
+    startup.feedAudio();
+    check(startup.audioFrames > frames && startup.warnings.size() == 1,
+          "after a reconnect, an AF readback resumes audio");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     TestSettingsProfile settings(QStringLiteral("icom-dual-receiver"));
     if (!settings.isValid()) { return 1; }
     checkLanOutputStartup();
+    checkLanOutputReconnect();
     // Stock IC-7110 in Auto, then two explicit model choices at a different
     // radio's factory address. A stale channel override cannot grant stereo.
     struct MediaFixture {
