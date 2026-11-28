@@ -2485,7 +2485,8 @@ private:
                              bool persist = true);
     void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
-    // Operator close: forgets the pan's Center Lock only if the model accepts it.
+    // Operator close: forgets the pan's Center Lock and Lock view setting only
+    // if the model accepts it.
     bool closePanForgettingCenterLock(const QString& panId);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located
@@ -2497,6 +2498,44 @@ private:
     void snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
                                        bool sendCommand);
     void holdCenterLockTuneTarget(SliceModel* slice, double mhz);
+
+    // Lock view — per-pan mode that holds the visible range while tuning, so
+    // the slice moves inside a fixed view (PanViewLockPolicy.h). Mutually
+    // exclusive with Center Lock on the same pan. The SpectrumWidget owns the
+    // live flag; this is the persisted intent by radio/station + pan index
+    // (ViewLockSettings.h). The locked range itself is radio-owned, never saved.
+    QHash<QString, QSet<int>> m_viewLockedPanIndicesByRadio;
+    // Lock (true) or unlock (false) chosen per pan index while disconnected.
+    // restoreViewLockForPan() applies and saves each on the next radio: an
+    // unlock at once, a lock once that radio can hold. A connection that ends
+    // first (ANAN, an Icom left in Center) drops what is left.
+    QHash<int, bool> m_pendingViewLockByPanIndex;
+    bool m_viewLockPendingSawConnection{false};
+    bool panViewLocked(const QString& panId) const;
+    // True when panId's view is locked and already shows mhz: a jump there
+    // tunes in place, so nothing may recenter or recall a band stack for it.
+    bool lockedViewShows(const QString& panId, double mhz) const;
+    // A locked view's range is frozen: refuse an operator pan/zoom command for
+    // panId and say why on the status bar. Returns true when refused.
+    bool refuseViewLockedRangeChange(const QString& panId);
+    // False when Lock view forbids the tune-driven recenter `intent` would do.
+    bool viewLockAllowsRecenter(const SliceModel* slice, double mhz,
+                                TuneIntent intent) const;
+    void loadViewLockSettings();
+    void saveViewLockSettings() const;
+    void setViewLockForPan(const QString& panId, bool locked, bool persist = true);
+    // Records panIndex's lock under the connected radio; writes on a change.
+    void storeViewLockIntent(int panIndex, bool locked);
+    // An accepted operator close forgets the pan's lock. panIndex is read
+    // before the close: a native close destroys the widget that carries it.
+    void forgetViewLockForClosedPan(const QString& panId, int panIndex);
+    void restoreViewLockForPan(const QString& panId);
+    // The span fraction panId can hold: 1.0 when disconnected (permissive),
+    // 0.0 when the radio declares no PanViewHold or this pan is not holding.
+    double viewLockHoldFraction(const QString& panId) const;
+    void syncViewLockAvailability(const QString& panId);
+    // Every capability publication, including each connect and disconnect.
+    void onViewLockCapabilitiesChanged(bool connected);
     double centerLockDisplayFrequency(const SliceModel* slice, double mhz) const;
     void recenterCenterLockForPan(const QString& panId);
     void recenterCenterLocks();

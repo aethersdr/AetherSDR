@@ -179,6 +179,10 @@ public:
     // IRadioBackend::panZoomPlacementChanged; Unknown until the backend reports.
     PanZoomPlacement zoomPlacement() const { return m_zoomPlacement; }
     void setZoomPlacement(PanZoomPlacement placement);
+    // IRadioBackend::panViewHoldChanged. True until a backend says otherwise:
+    // Flex, Sim and HL2 never emit it and rely on that; Icom reports each mode.
+    bool viewHolds() const { return m_viewHolds; }
+    void setViewHolds(bool holds);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -276,6 +280,7 @@ signals:
     void scopeModeLabelsChanged(const QStringList& labels);
     void scopeModeIndexChanged(int index);
     void zoomPlacementChanged(AetherSDR::PanZoomPlacement placement);
+    void viewHoldsChanged(bool holds);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -341,6 +346,7 @@ private:
     QStringList m_scopeModeLabels;
     int         m_scopeModeIndex{-1};
     PanZoomPlacement m_zoomPlacement{PanZoomPlacement::Unknown};
+    bool        m_viewHolds{true};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};

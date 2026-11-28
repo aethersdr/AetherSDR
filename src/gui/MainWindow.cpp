@@ -1468,6 +1468,7 @@ MainWindow::MainWindow(QWidget* parent)
     buildMenuBar();
     buildUI();
     loadCenterLockSettings();
+    loadViewLockSettings();
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -5811,6 +5812,7 @@ void MainWindow::buildUI()
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
+        syncViewLockAvailability(panId);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
             AetherSDR::clientFftSmoothingEnabled(
                 connected, caps.backendPanAveraging.has_value()));
@@ -7944,7 +7946,12 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
     if (hasMemoryFrequency) {
         const QString memoryBand = BandSettings::bandForFrequency(memoryFreqMhz);
         const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
-        if (memoryBand != currentBand) {
+        if (memoryBand != currentBand && lockedViewShows(slicePanId, memoryFreqMhz)) {
+            // A locked view already showing the memory tunes in place: a band
+            // stack recall would move the view to that band's saved center.
+            clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
+            m_bandSettings.setCurrentBand(memoryBand);
+        } else if (memoryBand != currentBand) {
             const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
             const auto stackKeyResult =
                 XvtrPolicy::resolveBandStackKey(memoryBand, xvtrs, m_radioModel.capabilities());
@@ -8832,8 +8839,10 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     // Everything below is Flex band-stack machinery — it ends in
     // `display pan set <pan> band=<key>`, a command plane an Icom or an HL2
     // does not have. The band was admissible, so let the ordinary tune-and-
-    // recenter path carry it (#5041).
-    if (admissibility.bandStackKey.isEmpty()) {
+    // recenter path carry it (#5041). A locked view already showing the
+    // target takes the same path: a stack recall would move the view.
+    if (admissibility.bandStackKey.isEmpty()
+        || lockedViewShows(slice->panId(), mhz)) {
         // But the band DID change, and the two things that follow from that on
         // a radio with no stack are the same two the band buttons already do
         // (MainWindow_Wiring.cpp). Dropping them here would have let a finished
@@ -8913,9 +8922,13 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
     if (m_radioModel.confirmsReceiveControls()) {
         if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
         IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
-        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+        // A locked view that may not move stays on Preserve.
+        const bool viewMayMove = viewLockAllowsRecenter(slice, mhz, intent);
+        if (viewMayMove
+            && (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice))) {
             view = IRadioBackend::ReceiveTuneView::Center;
-        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+        } else if (viewMayMove
+                   && (intent != TuneIntent::IncrementalTune || panFollowEnabled())) {
             view = IRadioBackend::ReceiveTuneView::Reveal;
         }
         // Receiver and display intent are admitted together. A refusal leaves
@@ -11375,6 +11388,13 @@ QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previ
                 removalCandidates.append(applet->panId());
             }
         }
+        // Read before the closes: a native close destroys the widget.
+        QHash<QString, int> panIndexById;
+        for (const QString& panId : removalCandidates) {
+            if (const SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+                panIndexById.insert(panId, sw->panIndex());
+            }
+        }
         // removePanadapter also tears down the waterfall (#3843); the removal
         // itself arrives later through panadapterRemoved.
         const PanLayoutShrinkPolicy::Outcome outcome = PanLayoutShrinkPolicy::closeFromEnd(
@@ -11383,6 +11403,10 @@ QString MainWindow::applyPanLayout(const QString& layoutId, const QString& previ
                 qDebug() << "applyPanLayout: closing pan" << panId;
                 return m_radioModel.removePanadapter(panId);
             });
+        // A pan the layout closed for good forgets its Lock view, like its ✕.
+        for (const QString& panId : outcome.closed) {
+            forgetViewLockForClosedPan(panId, panIndexById.value(panId, -1));
+        }
         const QString reflowId = PanLayoutShrinkPolicy::appliedLayout(layoutId, needed, outcome, previousLayout);
         if (PanLayoutShrinkPolicy::keepsArrangement(outcome)) {
             return reflowId;  // the first close was refused; nothing to reflow

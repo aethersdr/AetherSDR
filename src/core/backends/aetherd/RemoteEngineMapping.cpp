@@ -243,6 +243,9 @@ RadioCapabilities capabilitiesFrom(const QJsonObject& radioSession, const QStrin
         c.receiveDspControl = record;
         c.hasAgcThreshold = record.features.contains(Feature::Agc);
     }
+    // The engine's radio decides whether its pan follows a tuned slice, and v1
+    // carries no record of it: no hold is promised, so Lock view stays dimmed.
+    c.panViewHold = std::nullopt;
     // v1 has no AGC-mode method, so the selectors offer only what is running.
     c.agcModes = agcMode.isEmpty() ? QStringList{} : QStringList{agcMode.toLower()};
     return c;

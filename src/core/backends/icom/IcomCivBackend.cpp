@@ -561,6 +561,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
             RadioCapabilities::PanZoomModes::Control::NativeScopeSpan,
             QVector<int>(widths.begin(), widths.end())};
     }
+    // A scope with SCROLL-F and Fixed keeps its window still under a tuned VFO
+    // in those modes (SCROLL-F pages only once the VFO is off screen); which
+    // mode each pan is in travels on panViewHoldChanged. Center-only radios
+    // follow every tune.
+    c.panViewHold = scopeModesOffered()
+        ? std::optional(RadioCapabilities::PanViewHold{1.0}) : std::nullopt;
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // CI-V carries no waterfall rate: the client is the only memory it has.
     c.panWaterfallRateShaping =
@@ -2322,6 +2328,15 @@ PanZoomPlacement IcomCivBackend::zoomPlacement() const
 
 void IcomCivBackend::publishZoomPlacement(bool force)
 {
+    // The hold follows the mode the radio last reported, so a commanded change
+    // still in flight (placement Unknown) keeps it; before any report nothing
+    // is promised.
+    const bool holds = scopeModesOffered() && m_scopeReportedMode
+        && scopeModeHoldsView(*m_scopeReportedMode);
+    if (force || m_viewHoldPublished != holds) {
+        m_viewHoldPublished = holds;
+        emit panViewHoldChanged(panId(), holds);
+    }
     const PanZoomPlacement placement = zoomPlacement();
     if (!force && m_zoomPlacementPublished == placement) {
         return;
@@ -2459,6 +2474,7 @@ void IcomCivBackend::handleScopeRefusal(const std::string& key)
     m_scopeScrollRefused = true;
     resetScopeEdgeState();
     publishScopeModes();
+    publishCapabilities();  // scopeModesOffered() just changed what is declared
     if (m_session) {
         // A SCROLL-F write still queued behind the refused one must not follow it.
         m_civScheduler.cancelQueued("scope.mode");
@@ -2489,6 +2505,7 @@ void IcomCivBackend::resetScopeEdgeState()
         m_scopeReportedMode.reset();
         m_scopePublishedModeIndex = -2;
         m_zoomPlacementPublished.reset();
+        m_viewHoldPublished.reset();
         m_scopeModeRequestedAtMs = 0;
         m_scopeEdgeNumber = 0;
         m_scopeLowerHz = 0;
