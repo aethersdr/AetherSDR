@@ -50,7 +50,17 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { ++keys; }
+    // With holdKeyUp, the key-up's delivery is kept unfinished.
+    bool holdKeyUp{false};
+    AetherSDR::TxCoordinator::Completion heldKeyUp;
+    void setKeying(bool on, const AetherSDR::TxCoordinator::Operation&,
+                   const AetherSDR::TxCoordinator::Completion& completion) override
+    {
+        ++keys;
+        if (!on && holdKeyUp) {
+            heldKeyUp = completion;
+        }
+    }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 
@@ -306,6 +316,48 @@ void coverageAndSafety()
     check(f.backend->keys == 0, "safety cases issue no keying");
 }
 
+// A locally completed over keeps its TX ownership until qualified stop
+// evidence, which a backend with no interlock status (the HL2) never sends.
+// The guard uses the shared idle rule, RadioModel::transmitIdleForSelection(),
+// so receive control is admitted again once the key-up is delivered and RX is
+// confirmed, and stays refused while keyed or while the key-up is in flight.
+void afterALocalOver()
+{
+    Fixture f;
+    SliceDelta txSelection;
+    txSelection.txSlice = true;
+    f.radio.slice(0)->applyChanges(txSelection);
+    f.backend->caps.canTransmit = true;
+    f.radio.radioTransmitConfirmed(false);
+    check(f.tune(f.params()).contains("result"), "over: idle readback admits receive tuning");
+
+    f.radio.setTransmit(true);
+    check(f.backend->keys == 1 && f.radio.isRadioTransmitting(), "over: desktop MOX keys the backend");
+    f.rejected(f.params(), "request.conflict");
+    f.radio.radioTransmitConfirmed(false);
+    f.rejected(f.params(), "request.conflict");
+
+    f.radio.setTransmit(false);
+    check(f.backend->keys == 2 && f.radio.transmitOwnershipPending() && !f.radio.isRadioTransmitting(),
+          "over: after the key-up its TX ownership is retained, unconfirmed");
+    f.rejected(f.params(), "request.conflict");
+    f.radio.radioTransmitConfirmed(false);
+    check(f.radio.transmitOwnershipPending() && f.tune(f.params()).contains("result"),
+          "over: with RX confirmed and nothing in flight, receive tuning is admitted; ownership retained");
+
+    f.backend->holdKeyUp = true;
+    f.radio.setTransmit(true);
+    f.radio.setTransmit(false);
+    f.radio.radioTransmitConfirmed(false);
+    check(!f.radio.isRadioTransmitting(), "over: RX edge published while the key-up is held");
+    f.rejected(f.params(), "request.conflict");
+    f.backend->holdKeyUp = false;
+    f.backend->heldKeyUp.finish();
+    f.backend->heldKeyUp = {};
+    QCoreApplication::processEvents();
+    check(f.tune(f.params()).contains("result"), "over: once the key-up is delivered, tuning is admitted");
+}
+
 void numericDomainBoundary()
 {
     Fixture f;
@@ -406,6 +458,7 @@ int main(int argc, char** argv)
     authorizationAndSchema();
     authoritativeObservations();
     coverageAndSafety();
+    afterALocalOver();
     numericDomainBoundary();
     lifetimeAndBinding();
     requestBudget();
